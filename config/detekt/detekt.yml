@@ -1,0 +1,31 @@
+# Deviations from detekt's default rule set (buildUponDefaultConfig = true).
+# Philosophy: everything on by default; globally disable only rules this codebase
+# violates pervasively and intentionally, and use inline @Suppress for one-offs.
+build:
+  maxIssues: 0
+
+comments:
+  # Gate the public API on documentation (both off by default). Skip nested
+  # classes/objects so companions aren't required to carry their own KDoc.
+  UndocumentedPublicClass:
+    active: true
+    searchInNestedClass: false
+    searchInInnerClass: false
+    searchInInnerObject: false
+  UndocumentedPublicFunction:
+    active: true
+  # Per-property docs are noise on self-evident data-class fields.
+  UndocumentedPublicProperty:
+    active: false
+
+naming:
+  # Files are named by concept (Client, Cloud, Protocol, ...), not after a single
+  # top-level declaration.
+  MatchingDeclarationName:
+    active: false
+
+style:
+  # The wire protocol is built from byte/hex literals throughout; flagging each
+  # as a "magic number" would bury real findings.
+  MagicNumber:
+    active: false
