@@ -4,7 +4,7 @@ plugins {
     kotlin("jvm") version "2.2.20"
     kotlin("plugin.serialization") version "2.2.20"
     id("io.gitlab.arturbosch.detekt") version "1.23.8"
-    id("org.jetbrains.dokka") version "2.0.0"
+    id("org.jetbrains.dokka") version "2.2.0"
     id("org.jetbrains.kotlinx.kover") version "0.9.9"
     id("ru.vyarus.animalsniffer") version "2.0.1"
     `maven-publish`
