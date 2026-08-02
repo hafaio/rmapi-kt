@@ -1,0 +1,240 @@
+# rmapi-kt
+
+[![build](https://github.com/hafaio/rmapi-kt/actions/workflows/build.yml/badge.svg)](https://github.com/hafaio/rmapi-kt/actions/workflows/build.yml)
+[![jitpack](https://jitpack.io/v/hafaio/rmapi-kt.svg)](https://jitpack.io/#hafaio/rmapi-kt)
+[![license](https://img.shields.io/github/license/hafaio/rmapi-kt)](LICENSE)
+
+Kotlin/JVM client for the reMarkable cloud API — documents, folders, sync, and the `.rm`
+stroke format. Plain Kotlin/JVM with no Android dependencies, and Android-compatible down
+to API 21.
+
+## Model
+
+Everything is stored by the SHA-256 hash of its contents — documents, folders, and the
+indexes that list them. A hash therefore names both a thing *and* its exact state, which
+is how simultaneous edits are detected. Every item also has an `id`, a uuid4 that is
+stable for the item's lifetime, so reads take an `ItemRef` pairing the two rather than
+two separate strings that can be transposed.
+
+Editing is read-modify-write: there is no "rename" call, so renaming means fetching the
+`.metadata` file, changing one field, uploading it, and moving the account's root index
+to point at the result. Two clients doing that at once will race; the loser retries
+automatically.
+
+## Usage
+
+Register once with the eight-letter code from
+<https://my.remarkable.com/device/desktop/connect>, then persist the device token — it
+does not expire.
+
+```kotlin
+val deviceToken = register("abcdefgh")   // a DeviceToken; persist it
+val api = remarkable(deviceToken)
+
+for (ref in api.listRefs()) {
+    val metadata = api.getMetadata(ref)
+    println("${metadata.visibleName} (${metadata.type}) ${metadata.modifiedAt}")
+}
+```
+
+`listRefs` costs one request for the root index; each `getMetadata` costs two more, so fetch
+them concurrently with `async` if you want the whole account at once. `Metadata` is the
+wire's own item-level type and already carries the name, parent, kind, and timestamps. A
+document's `.content` holds only render settings and tags, so it is never fetched for a
+listing; call `getContent(ref)` for the items you want it for. The wire stores timestamps as
+strings, and `modifiedAt` / `openedAt` / `createdAt` read them as numbers.
+
+`DeviceToken` and `SessionToken` are distinct types rather than both being `String`, so
+handing the wrong one to `session` is a compile error instead of a confusing runtime
+authentication failure.
+
+In stateless environments, exchange the device token for a session once and reuse it:
+
+```kotlin
+val sessionToken = auth(deviceToken)     // short-lived
+val api = session(sessionToken)          // no network call
+```
+
+### Reading
+
+```kotlin
+val ref = api.listRefs().first { api.getMetadata(it).type == EntryType.Document }
+
+val pdf = api.getPdf(ref)                 // ComponentNotFoundException if it has none
+val metadata = api.getMetadata(ref)
+val template = api.getTemplate(ref)       // a template item's .template definition
+val pages = api.getRawPages(ref)          // undecoded .rm files, by page id
+```
+
+Strokes come back the same way whichever firmware wrote the page:
+
+```kotlin
+for ((pageId, bytes) in api.getRawPages(ref)) {
+    for (layer in parseRmFile(bytes).layers) {
+        for (stroke in layer.strokes) {
+            println("$pageId ${layer.name} ${stroke.pen} ${stroke.points.size} points")
+        }
+    }
+}
+```
+
+Format versions 3 and 5 are entirely layers and strokes. Version 6 — what current firmware
+writes — is a block-structured document, so it arrives as `RmFile.Scene`, which exposes the
+same `layers` plus every raw `block`: a v6 page also carries text, glyphs, and editing
+history that this library frames but does not interpret, and keeps rather than discards.
+
+Parsing is strict throughout — a truncated stroke or a malformed block raises
+`ValidationException` rather than yielding partial garbage. Erased strokes are dropped, as
+the device records them as tombstones with no stroke data.
+
+Pages can be written back as well:
+
+```kotlin
+val page = parseRmFile(bytes)
+val staged = api.raw.stageRm("$pageId.rm", page)   // hashes locally, sends nothing
+api.raw.upload(staged)
+```
+
+An untouched page re-serialises to the identical bytes, so it keeps its hash and the upload
+is skipped entirely. A version 6 page is written from its `blocks`; its `layers` are a
+decoded view of those, so editing `layers` and writing the result back changes nothing.
+
+### Writing
+
+Every edit takes an `ItemRef` and returns one, so the result of an edit is directly usable
+as the input to the next — an item's hash changes on every write, and reassembling the ref
+by hand is exactly the transposition hazard `ItemRef` exists to prevent:
+
+```kotlin
+val renamed = api.rename(ref, "a better name")
+val starred = api.setStarred(renamed, true)
+api.move(starred, Parent.Folder(folder.id))
+api.trash(starred)                              // there is no hard delete
+```
+
+Bulk edits take one root write, and say which refs they could not find rather than
+silently skipping them:
+
+```kotlin
+val result = api.bulkTrash(listOf(firstRef, secondRef))
+result.moved            // Map<ItemRef, ItemRef>, old to new
+result.notFound         // refs that were no longer in the root index
+```
+
+Content edits take a lambda over the fetched value, so the read-modify-write is explicit:
+
+```kotlin
+api.updateDocumentContent(ref) { it.copy(textScale = 1.5, lineHeight = 200) }
+```
+
+### Two ways to add a document
+
+These are different mechanisms, not synonyms:
+
+- `upload*` hands the file to the server's ingestion endpoint. The server builds the
+  document. Robust, but no options.
+- `put*` builds the document's component files locally and commits them through the sync
+  protocol. Full control via `PutOptions`.
+
+```kotlin
+api.uploadPdf("simple", bytes)
+
+api.putEpub("controlled", bytes, PutOptions(
+    lineHeight = 180,                           // a value reMarkable's own apps don't expose
+    margins = 50,
+    parent = Parent.Folder(folder.id),
+    zoom = Zoom.Custom(                         // the custom fit needs all of its numbers,
+        scale = 1.5,                            // so they travel together rather than as
+        centerX = 0.0, centerY = 0.0,           // six optional fields beside a mode enum
+        pageWidth = 1404.0, pageHeight = 1872.0,
+        orientation = Orientation.Portrait,
+    ),
+))
+```
+
+A document can also be archived and restored, which round-trips every component file. Note
+this is a transfer format, not the document itself — for the pdf use `getPdf`:
+
+```kotlin
+val archive = api.exportArchive(ref)      // a zip of every component file
+val restored = api.importArchive(archive)       // under a fresh id by default
+```
+
+## Configuration
+
+```kotlin
+val api = session(sessionToken, SessionOptions(
+    httpClient = OkHttpClient.Builder().build(), // timeouts, interceptors, proxies, pinning
+    maxTransientRetries = 3,                     // network errors, 5xx, 429
+    maxGenerationRetries = 10,                   // lost races against another client
+    cache = previousDump,                        // from dumpCache(); discarded if unreadable
+    maxCacheChars = 8 * 1024 * 1024,             // a growth bound, not a memory budget
+))
+```
+
+The default `OkHttpClient` is shared across option sets rather than constructed per
+instance, so a defaulted `SessionOptions()` does not create its own connection pool.
+
+The three hosts are overridable too, which is how you point the client at
+[rmfakecloud](https://github.com/ddvk/rmfakecloud).
+
+## Errors
+
+Everything the library raises itself extends `RemarkableException`:
+
+| | when |
+|---|---|
+| `GenerationException` | another client wrote the root first, and the retries ran out |
+| `ResponseException` | the server answered outside 2xx; carries status and body |
+| `ValidationException` | a payload didn't match what was expected; carries the raw text |
+| `HashNotFoundException` | the hash isn't in the current root index |
+| `ComponentNotFoundException` | the item exists but has no such file, e.g. no epub |
+
+`IOException` from OkHttp is deliberately not wrapped: the network being down is a
+different problem with a different handler than the API refusing a request.
+
+Decoding is **strict** — a key this library doesn't model is an error rather than
+something silently dropped, because a read-modify-write that dropped it would destroy
+whatever the device stored there. The cost is that a field added by new firmware fails
+the parse until this library is updated; `ValidationException.rawJson` and the low-level
+`api.raw` client both hand you the payload so you are never locked out of your data.
+
+## Installation
+
+Via [JitPack](https://jitpack.io/#hafaio/rmapi-kt):
+
+```kotlin
+repositories {
+    maven("https://jitpack.io")
+}
+
+dependencies {
+    implementation("com.github.hafaio:rmapi-kt:<version>")
+}
+```
+
+Maven users note that OkHttp 5 is published as a Kotlin Multiplatform project — the
+`okhttp` artifact is empty for Maven, so select `okhttp-jvm` or `okhttp-android`
+explicitly. Gradle handles this automatically.
+
+## Android
+
+Requires **minSdk 21**, with no core-library desugaring. This is enforced rather than
+claimed: the build runs [animalsniffer](https://github.com/xvik/gradle-animalsniffer-plugin)
+against Android API-21 signatures, so a call to anything newer fails CI.
+
+## Scope
+
+Rendering a notebook to a page image and exporting annotated PDFs happen inside
+reMarkable's own apps and are not implemented here. `.rm` stroke files are parsed for
+format versions 3, 5, and 6; within version 6, text and glyph blocks are kept but not
+interpreted.
+
+## Design
+
+[`docs/design.md`](docs/design.md) describes the protocol this talks to and the reasoning
+behind the API's shape.
+
+## License
+
+MIT
