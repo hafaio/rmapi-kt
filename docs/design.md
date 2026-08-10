@@ -387,6 +387,13 @@ tells a caller that deleting is a move — and therefore reversible — rather t
 to discover that `Parent.Trash` is where deletion lives. `dumpCache`/`clearCache` exist once,
 on `RemarkableClient`, because the cache is configured once, on `SessionOptions`.
 
+The same exemption covers `rename` and `star` beside `setMetadata`: each names a wire
+field a caller would otherwise have to know is called something else — `visibleName`, and
+`pinned` for a flag the device draws as a star. `move` earns its place by taking a `Parent`
+rather than the raw string the field holds. The general form is public because the named
+cases cannot cover the rest of `Metadata`, not because the named cases were a mistake; what
+the rule forbids is a second name for the *same* thing, not a shorter name for a common one.
+
 ### D8. Error taxonomy — designed around what a caller branches on
 
 What does a caller of this library actually branch on? (1) *"my view of the root was
@@ -671,7 +678,7 @@ needs no bookkeeping:
 
 ```kotlin
 val renamed = api.rename(entry.ref, "new name")
-val starred = api.setStarred(renamed, true)
+val starred = api.star(renamed, true)
 api.move(starred, Parent.Folder(folder.id))
 ```
 

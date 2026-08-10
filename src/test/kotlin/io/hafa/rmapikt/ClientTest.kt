@@ -283,13 +283,36 @@ class ClientTest {
     }
 
     @Test
-    fun `setStarred toggles the pinned flag`() = runTest {
+    fun `star toggles the pinned flag`() = runTest {
         val api = client()
         val document = api.putPdf("doc", byteArrayOf(1))
-        val starred = api.setStarred(document, true)
+        val starred = api.star(document, true)
         assertTrue(cloud.uploadedMetadata().pinned)
-        api.setStarred(starred, false)
+        api.star(starred, false)
         assertTrue(!cloud.uploadedMetadata().pinned)
+    }
+
+    @Test
+    fun `setMetadata reaches a field the named edits do not`() = runTest {
+        val api = client()
+        val document = api.putPdf("doc", byteArrayOf(1))
+        api.setMetadata(document, api.getMetadata(document).copy(lastOpenedPage = 7, source = "com.example"))
+
+        val metadata = cloud.uploadedMetadata()
+        assertEquals(7, metadata.lastOpenedPage)
+        assertEquals("com.example", metadata.source)
+        assertEquals("doc", metadata.visibleName, "the rest of the metadata is untouched")
+    }
+
+    @Test
+    fun `setMetadata marks the change as coming from off the device`() = runTest {
+        val api = client()
+        val document = api.putPdf("doc", byteArrayOf(1))
+        api.setMetadata(document, api.getMetadata(document).copy(version = 41, metadatamodified = false))
+
+        val metadata = cloud.uploadedMetadata()
+        assertEquals(42, metadata.version, "the returned version is bumped, not written as given")
+        assertEquals(true, metadata.metadatamodified)
     }
 
     @Test
@@ -297,7 +320,7 @@ class ClientTest {
         val api = client()
         val first = api.putPdf("one", byteArrayOf(1))
         val renamed = api.rename(first, "two")
-        val starred = api.setStarred(renamed, true)
+        val starred = api.star(renamed, true)
         val moved = api.move(starred, Parent.Trash)
         assertEquals(first.id, moved.id)
         assertEquals("two", api.getMetadata(moved).visibleName)
