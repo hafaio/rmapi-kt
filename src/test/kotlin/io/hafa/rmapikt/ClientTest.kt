@@ -788,6 +788,68 @@ class ClientTest {
     }
 
     @Test
+    fun `getHighlights returns every page that carries them, keyed by page id`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val page = """
+            {"highlights":[[{"text":"a passage","color":3,"start":10,"length":9,
+             "rects":[{"x":1.0,"y":2.0,"width":3.0,"height":4.0}]}]]}
+        """.trimIndent()
+        val ref = cloud.seed(
+            documentMetadata("a pdf"),
+            documentContent().copy(pages = listOf("page-a", "page-b")),
+            id = id,
+            extraFiles = mapOf("$id.highlights/page-a.json" to page.toByteArray()),
+        )
+        val api = client()
+        val all = api.getHighlights(ref)
+        assertEquals(setOf("page-a"), all.keys, "page-b has no highlights file")
+
+        val fragment = all.getValue("page-a").single().single()
+        assertEquals("a passage", fragment.text)
+        assertEquals(3, fragment.color)
+        assertEquals(HighlightRect(1.0, 2.0, 3.0, 4.0), fragment.rects.single())
+        assertNull(api.getHighlights(ref, "page-b"), "a declared page with none reads as null")
+        assertFailsWith<ValidationException> { api.getHighlights(ref, "page-z") }
+    }
+
+    @Test
+    fun `setHighlights adds a file for a page that had none and leaves others alone`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val existing = """{"highlights":[[{"text":"kept","color":1,"start":0,"length":4,"rects":[]}]]}"""
+        val ref = cloud.seed(
+            documentMetadata("a pdf"),
+            documentContent().copy(pages = listOf("page-a", "page-b")),
+            id = id,
+            extraFiles = mapOf("$id.highlights/page-a.json" to existing.toByteArray()),
+        )
+        val api = client()
+        val added = listOf(listOf(Highlight("new", 2, 5, 3, listOf(HighlightRect(0.0, 0.0, 1.0, 1.0)))))
+        val updated = api.setHighlights(ref, "page-b", added)
+
+        assertEquals(added, api.getHighlights(updated, "page-b"))
+        assertEquals("kept", api.getHighlights(updated, "page-a")!!.single().single().text)
+    }
+
+    @Test
+    fun `setHighlights refuses a page the document does not declare`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a pdf"),
+            documentContent().copy(pages = listOf("page-a")),
+        )
+        val error = assertFailsWith<ValidationException> {
+            client().setHighlights(ref, "page-z", listOf(listOf(Highlight("x", 1, 0, 1, emptyList()))))
+        }
+        assertTrue("page-z" in error.message.orEmpty(), error.message.orEmpty())
+    }
+
+    @Test
+    fun `setHighlights with nothing to write makes no request at all`() = runTest {
+        val ref = cloud.seed(documentMetadata("a pdf"), documentContent())
+        assertEquals(ref, client().setHighlights(ref, emptyMap()))
+        assertTrue(cloud.received.none { it.method == "PUT" })
+    }
+
+    @Test
     fun `setTemplate rewrites a template's definition`() = runTest {
         val id = java.util.UUID.randomUUID().toString()
         val definition = """

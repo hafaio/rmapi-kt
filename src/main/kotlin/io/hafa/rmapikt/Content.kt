@@ -408,3 +408,54 @@ public val Metadata.createdAt: Long? get() = createdTime?.asEpochMillis("created
 
 internal fun String.asEpochMillis(field: String): Long = toLongOrNull()
     ?: throw ValidationException("$field was '$this', which is not an epoch timestamp", this)
+
+/** a rectangle with its origin at the top left of the source page */
+@Serializable
+public data class HighlightRect(
+    /** the distance from the page's left edge */
+    public val x: Double,
+    /** the distance from the page's top edge */
+    public val y: Double,
+    /** the width */
+    public val width: Double,
+    /** the height */
+    public val height: Double,
+)
+
+/**
+ * one text-highlight fragment on a pdf or epub page
+ *
+ * reMarkable splits a highlighted passage into one fragment per line it spans, which is why
+ * a page's highlights are a list of lists rather than a flat one.
+ */
+@Serializable
+public data class Highlight(
+    /** the highlighted text */
+    public val text: String,
+    /** speculative: an index into the highlight palette, which is not the pen palette */
+    public val color: Int,
+    /** the character offset of the highlight within the page's text */
+    public val start: Int,
+    /** the number of characters highlighted */
+    public val length: Int,
+    /** the rectangles the fragment spans, one per line */
+    public val rects: List<HighlightRect>,
+)
+
+/** the wire wrapper around a page's highlights */
+@Serializable
+internal data class HighlightsFile(val highlights: List<List<Highlight>>)
+
+/** one layer on a page */
+@Serializable
+public data class PageLayer(
+    /** the layer's display name */
+    public val name: String,
+)
+
+/** a page's layer metadata, stored beside the page as `<pageId>-metadata.json` */
+@Serializable
+public data class PageMetadata(
+    /** the page's layers, in order */
+    public val layers: List<PageLayer>,
+)
