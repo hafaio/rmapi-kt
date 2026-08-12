@@ -180,10 +180,8 @@ internal fun decodeSceneLayers(blocks: List<RmBlock>): List<RmLayer> {
         addAll(names.keys)
         addAll(grouped.keys)
     }
-    return ordered.mapNotNull { id ->
-        val layerStrokes = grouped[id] ?: return@mapNotNull null
-        RmLayer(strokes = layerStrokes, name = names[id])
-    }
+    // a named layer never drawn on is still a layer, and PageMetadata names them by index
+    return ordered.map { id -> RmLayer(strokes = grouped[id].orEmpty(), name = names[id]) }
 }
 
 private fun readTreeNode(reader: TaggedReader): Pair<CrdtId, String>? {
@@ -254,17 +252,21 @@ public data class RmBlock(
     public val currentVersion: Int,
     /** the block's undecoded contents */
     public val payload: ByteArray,
+    /** a byte the format reserves and no public description explains */
+    public val reserved: Int = 0,
 ) {
     override fun equals(other: Any?): Boolean = this === other ||
         (
             other is RmBlock && type == other.type && minVersion == other.minVersion &&
-                currentVersion == other.currentVersion && payload.contentEquals(other.payload)
+                currentVersion == other.currentVersion && reserved == other.reserved &&
+                payload.contentEquals(other.payload)
             )
 
     override fun hashCode(): Int {
         var result = type
         result = 31 * result + minVersion
         result = 31 * result + currentVersion
+        result = 31 * result + reserved
         result = 31 * result + payload.contentHashCode()
         return result
     }
@@ -275,8 +277,7 @@ internal fun readBlocks(body: ByteBuffer, header: String): List<RmBlock> {
     while (body.remaining() >= BLOCK_HEADER_LENGTH) {
         val length = body.int
         requireValid(length >= 0, header) { "a block declared a negative length ($length)" }
-        // one byte the format reserves and no public description explains
-        body.get()
+        val reserved = body.get().toInt() and 0xFF
         val minVersion = body.get().toInt() and 0xFF
         val currentVersion = body.get().toInt() and 0xFF
         val type = body.get().toInt() and 0xFF
@@ -285,7 +286,7 @@ internal fun readBlocks(body: ByteBuffer, header: String): List<RmBlock> {
         }
         val payload = ByteArray(length)
         body.get(payload)
-        blocks.add(RmBlock(type, minVersion, currentVersion, payload))
+        blocks.add(RmBlock(type, minVersion, currentVersion, payload, reserved))
     }
     requireValid(body.remaining() == 0, header) {
         "${body.remaining()} trailing bytes after the last block"
@@ -308,8 +309,7 @@ internal fun serializeRmV6(file: RmFile.Scene): ByteArray {
     out.put("$RM_HEADER_PREFIX${file.version}".padEnd(RM_HEADER_LENGTH).toByteArray(Charsets.US_ASCII))
     for (block in file.blocks) {
         out.putInt(block.payload.size)
-        // the byte the format reserves, which every page the device wrote has as zero
-        out.put(0)
+        out.put(block.reserved.toByte())
         out.put(block.minVersion.toByte())
         out.put(block.currentVersion.toByte())
         out.put(block.type.toByte())
