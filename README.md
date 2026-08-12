@@ -107,9 +107,17 @@ by hand is exactly the transposition hazard `ItemRef` exists to prevent:
 
 ```kotlin
 val renamed = api.rename(ref, "a better name")
-val starred = api.setStarred(renamed, true)
-api.move(starred, Parent.Folder(folder.id))
-api.trash(starred)                              // there is no hard delete
+val starred = api.star(renamed, true)
+val moved = api.move(starred, Parent.Folder(folder.id))
+api.trash(moved)                                // there is no hard delete
+```
+
+`move`, `rename` and `star` are the named cases of `setMetadata`, which reaches the rest of
+`Metadata` — `lastOpenedPage`, `deleted`, `source`. Writes take a value, so a change is a
+read, a `copy`, and a write:
+
+```kotlin
+api.setMetadata(ref, api.getMetadata(ref).copy(lastOpenedPage = 12))
 ```
 
 Bulk edits take one root write, and say which refs they could not find rather than

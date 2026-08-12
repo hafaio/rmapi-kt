@@ -388,7 +388,7 @@ public data class Metadata(
     public val modified: Boolean? = null,
     /** unknown: */
     public val synced: Boolean? = null,
-    /** speculative: the metadata version, always 0 */
+    /** speculative: the metadata version, which every edit bumps */
     public val version: Int? = null,
     /** whether this is a newly installed template */
     public val new: Boolean? = null,

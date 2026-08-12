@@ -571,6 +571,18 @@ public class RemarkableClient internal constructor(
         return itemIndex to listOf(staged, itemIndex)
     }
 
+    /**
+     * writes an item's `.metadata`
+     *
+     * The general form of [move], [rename] and [star], and the only way to reach the rest of
+     * [Metadata] — `lastOpened`, `lastOpenedPage`, `deleted`, `source`, the flags.
+     *
+     * [Metadata.version] and [Metadata.metadatamodified] are overwritten regardless of what
+     * [metadata] carries: they are how the device is told a change came from elsewhere.
+     */
+    public suspend fun setMetadata(ref: ItemRef, metadata: Metadata): ItemRef =
+        editMetadata(ref) { metadata }
+
     private suspend fun editMetadata(
         ref: ItemRef,
         update: (Metadata) -> Metadata,
@@ -601,7 +613,7 @@ public class RemarkableClient internal constructor(
         editMetadata(ref) { it.copy(visibleName = visibleName) }
 
     /** stars or unstars an item; the wire calls this `pinned` */
-    public suspend fun setStarred(ref: ItemRef, starred: Boolean): ItemRef =
+    public suspend fun star(ref: ItemRef, starred: Boolean): ItemRef =
         editMetadata(ref) { it.copy(pinned = starred) }
 
     /**
