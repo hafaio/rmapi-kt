@@ -305,8 +305,21 @@ public class RemarkableClient internal constructor(
     }
 
     /** the page ids the item's `.content` declares; empty for anything but a document */
-    private suspend fun declaredPages(ref: ItemRef): Set<String> =
-        (getContent(ref) as? DocumentContent)?.pages.orEmpty().toSet()
+    /**
+     * The page ids the item's `.content` declares, or every page it has a file for.
+     *
+     * [DocumentContent.pages] is null until the device first opens the document; the
+     * component list is the same truth one step further out.
+     */
+    private suspend fun declaredPages(ref: ItemRef): Set<String> {
+        val declared = (getContent(ref) as? DocumentContent)?.pages
+        return declared?.toSet() ?: pagedFileIds(ref)
+    }
+
+    private suspend fun pagedFileIds(ref: ItemRef): Set<String> =
+        componentEntries(ref).mapNotNullTo(mutableSetOf()) {
+            PagedFile.Rm.pageIdOf(ref.id.value, it.id)
+        }
 
     /**
      * every component file of the item, zipped
@@ -753,6 +766,7 @@ public class RemarkableClient internal constructor(
     public suspend fun setPagedata(ref: ItemRef, templates: List<String>): ItemRef =
         editItem(ref) { item, schemaVersion ->
             val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
+            requireKind(itemRef, EntryType.Document)
             val components = componentEntries(itemRef).toMutableList()
             val fileName = "${item.id}$PAGEDATA_SUFFIX"
             val staged = rawClient.stageText(fileName, templates.joinToString("") { "$it\n" })
@@ -881,6 +895,10 @@ public class RemarkableClient internal constructor(
             // an identity, and note that keying by it would also silently drop a duplicate
             val wanted = refs.associateBy { it.id.value to it.hash }
             val (toUpdate, untouched) = rootEntries().partition { (it.id to it.hash) in wanted }
+            // the server accepts an unchanged root and still burns a generation
+            if (toUpdate.isEmpty()) {
+                return@withGenerationRetry BulkResult(emptyMap(), refs.toSet())
+            }
 
             val edits = coroutineScope {
                 toUpdate.map { item ->
