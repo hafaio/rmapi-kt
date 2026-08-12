@@ -1,22 +1,30 @@
 package io.hafa.rmapikt
 
 import kotlinx.serialization.Serializable
+import kotlin.io.encoding.Base64
 
 /** the dump format this build writes, and the only one it accepts */
-private const val CACHE_VERSION = 1
+private const val CACHE_VERSION = 2
+
+/** how a dumped body is encoded, so a later format change is legible rather than silent */
+private const val CACHE_ENCODING = "base64"
 
 /**
  * what the client knows about one hash
  *
- * Blobs are content-addressed, so a cached entry can never go stale and nothing needs a
- * ttl. The two cases exist because the two kinds of blob want different treatment: text
- * blobs (entry indexes, `.content`, `.metadata`) are small enough to keep whole, while
- * pdfs and epubs are not, and for those it is enough to remember that the server already
- * has the hash so an upload can be skipped.
+ * Blobs are content-addressed, so a cached entry can never go stale and nothing needs a ttl.
+ * The two cases split on size, not on kind: anything small enough is kept whole, and for a
+ * blob too large to hold it is enough to remember the server has the hash so an upload can
+ * be skipped.
  */
 internal sealed interface CacheEntry {
-    /** the full contents of a small text blob */
-    data class Text(val text: String) : CacheEntry
+    /** the full contents of a blob small enough to keep */
+    class Body(val bytes: ByteArray) : CacheEntry {
+        override fun equals(other: Any?): Boolean =
+            this === other || (other is Body && bytes.contentEquals(other.bytes))
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
 
     /** a large blob known to be on the server; skip re-uploading it, but still fetch to read */
     data object Exists : CacheEntry
@@ -25,72 +33,76 @@ internal sealed interface CacheEntry {
 @Serializable
 private data class CacheDump(
     val version: Int,
-    val text: Map<String, String>,
+    val encoding: String,
+    val bodies: Map<String, String>,
     val exists: List<String>,
 )
 
 /**
- * A least-recently-used cache of blobs by hash, bounded by total character count.
+ * A least-recently-used cache of blobs by hash, bounded by total size.
  *
- * Characters rather than bytes: the bound exists to stop the cache growing without limit,
- * not to account for memory exactly, and `String.length` is free where any byte count has
- * to either encode the string or approximate it. For what this cache holds — entry
- * indexes and json metadata, almost entirely ascii — the two agree anyway.
+ * Values are bytes rather than text. A cache that held decoded text could only admit blobs
+ * that decode losslessly, which left the binary ones — `.rm` pages above all — fetching over
+ * the network every time; bytes admit every kind, and a caller wanting text decodes on the
+ * way out.
  *
- * Every operation is synchronized. The critical sections are pure map manipulation with
- * no suspension and no i/o, so a monitor is both cheaper and simpler than a suspending
- * mutex. Two concurrent readers of the same missing hash will both fetch it and then
- * converge on the same value, which is harmless for content-addressed data and much less
- * machinery than single-flighting.
+ * Every operation is synchronized. The critical sections are pure map manipulation with no
+ * suspension and no i/o, so a monitor is both cheaper and simpler than a suspending mutex.
+ * Two concurrent readers of the same missing hash will both fetch it and then converge on
+ * the same value, which is harmless for content-addressed data and much less machinery than
+ * single-flighting.
  */
-internal class LruCache(private val maxChars: Long) {
+internal class LruCache(private val maxBytes: Long) {
     private val lock = Any()
     private val entries = LinkedHashMap<String, CacheEntry>(INITIAL_CAPACITY, LOAD_FACTOR, true)
-    private var currentChars = 0L
+    private var currentBytes = 0L
 
     operator fun get(hash: String): CacheEntry? = synchronized(lock) { entries[hash] }
 
     operator fun set(hash: String, entry: CacheEntry): Unit = synchronized(lock) {
-        entries.remove(hash)?.let { currentChars -= sizeOf(hash, it) }
+        entries.remove(hash)?.let { currentBytes -= sizeOf(hash, it) }
         entries[hash] = entry
-        currentChars += sizeOf(hash, entry)
+        currentBytes += sizeOf(hash, entry)
         // never evict the entry just written, so a single oversized blob is still cached
-        while (currentChars > maxChars && entries.size > 1) {
+        while (currentBytes > maxBytes && entries.size > 1) {
             val eldest = entries.entries.iterator().next()
             entries.remove(eldest.key)
-            currentChars -= sizeOf(eldest.key, eldest.value)
+            currentBytes -= sizeOf(eldest.key, eldest.value)
         }
     }
 
     fun remove(hash: String): Boolean = synchronized(lock) {
         val removed = entries.remove(hash) ?: return false
-        currentChars -= sizeOf(hash, removed)
+        currentBytes -= sizeOf(hash, removed)
         return true
     }
 
     fun clear(): Unit = synchronized(lock) {
         entries.clear()
-        currentChars = 0
+        currentBytes = 0
     }
 
     fun hashes(): Set<String> = synchronized(lock) { entries.keys.toSet() }
 
-    fun charCount(): Long = synchronized(lock) { currentChars }
+    fun byteCount(): Long = synchronized(lock) { currentBytes }
 
     fun dump(): String = synchronized(lock) {
-        val text = LinkedHashMap<String, String>()
+        val bodies = LinkedHashMap<String, String>()
         val exists = ArrayList<String>()
         for ((hash, entry) in entries) {
             when (entry) {
-                is CacheEntry.Text -> text[hash] = entry.text
+                is CacheEntry.Body -> bodies[hash] = Base64.encode(entry.bytes)
                 CacheEntry.Exists -> exists.add(hash)
             }
         }
-        return encodeWire(CacheDump.serializer(), CacheDump(CACHE_VERSION, text, exists))
+        return encodeWire(
+            CacheDump.serializer(),
+            CacheDump(CACHE_VERSION, CACHE_ENCODING, bodies, exists),
+        )
     }
 
     private fun sizeOf(hash: String, entry: CacheEntry): Long = when (entry) {
-        is CacheEntry.Text -> (hash.length + entry.text.length).toLong()
+        is CacheEntry.Body -> (hash.length + entry.bytes.size).toLong()
         CacheEntry.Exists -> hash.length.toLong()
     }
 
@@ -101,21 +113,21 @@ internal class LruCache(private val maxChars: Long) {
         /**
          * Rebuilds a cache from a previous [dump].
          *
-         * The version is checked rather than assumed so that a dump written by a future
-         * build is refused outright instead of being read as though the format had not
-         * changed.
+         * The version and encoding are checked rather than assumed, so a dump written by a
+         * different build is refused outright instead of read as though nothing had changed.
          */
-        fun load(dump: String, maxChars: Long): LruCache {
+        fun load(dump: String, maxBytes: Long): LruCache {
             val parsed = decodeWire(CacheDump.serializer(), dump, "cache dump")
-            if (parsed.version != CACHE_VERSION) {
+            if (parsed.version != CACHE_VERSION || parsed.encoding != CACHE_ENCODING) {
                 throw ValidationException(
-                    "cache dump version ${parsed.version} is not supported; expected $CACHE_VERSION",
+                    "cache dump is version ${parsed.version} in ${parsed.encoding}; " +
+                        "expected $CACHE_VERSION in $CACHE_ENCODING",
                     dump,
                 )
             }
-            val cache = LruCache(maxChars)
-            for ((hash, text) in parsed.text) {
-                cache[hash] = CacheEntry.Text(text)
+            val cache = LruCache(maxBytes)
+            for ((hash, body) in parsed.bodies) {
+                cache[hash] = CacheEntry.Body(Base64.decode(body))
             }
             for (hash in parsed.exists) {
                 cache[hash] = CacheEntry.Exists

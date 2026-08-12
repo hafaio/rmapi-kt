@@ -79,7 +79,6 @@ public class StagedFile internal constructor(
     public val entry: RawEntry,
     internal val fileName: String,
     internal val bytes: ByteArray,
-    internal val cacheText: String?,
 )
 
 
@@ -100,6 +99,7 @@ public class RawRemarkableClient internal constructor(
     private val cache: LruCache,
     private val rawHost: String,
     private val uploadHost: String,
+    private val maxCachedBlobBytes: Int,
 ) {
 
     /**
@@ -155,40 +155,19 @@ public class RawRemarkableClient internal constructor(
      */
     public suspend fun getBlob(fileName: String, hash: FileHash): ByteArray {
         val cached = cache[hash.hex]
-        return if (cached is CacheEntry.Text) {
-            cached.text.toByteArray(Charsets.UTF_8)
-        } else {
-            val bytes = fetch(fileName, hash)
-            if (cache[hash.hex] == null) {
-                cache[hash.hex] = CacheEntry.Exists
-            }
-            bytes
+        if (cached is CacheEntry.Body) {
+            return cached.bytes
         }
+        // two concurrent readers of one hash will both fetch and then agree; for
+        // content-addressed data that is a wasted request, not a correctness problem
+        val bytes = fetch(fileName, hash)
+        remember(hash.hex, bytes)
+        return bytes
     }
 
-    /** [getBlob] decoded as utf-8, and cached in full because text blobs are small */
-    public suspend fun getText(fileName: String, hash: FileHash): String {
-        val cached = cache[hash.hex]
-        return if (cached is CacheEntry.Text) {
-            cached.text
-        } else {
-            // two concurrent readers of one hash will both fetch and then agree; for
-            // content-addressed data that is a wasted request, not a correctness problem
-            val bytes = fetch(fileName, hash)
-            val text = bytes.toString(Charsets.UTF_8)
-            // Decoding bytes that are not valid utf-8 substitutes replacement characters,
-            // and the original bytes cannot be recovered from the result. Caching such a
-            // decode would let a later getBlob of the same hash hand back a mangled
-            // re-encoding, so only a provably lossless decode is kept as text. Reading a
-            // binary blob as text is a caller's mistake, but it must not corrupt the blob.
-            cache[hash.hex] = if (text.toByteArray(Charsets.UTF_8).contentEquals(bytes)) {
-                CacheEntry.Text(text)
-            } else {
-                CacheEntry.Exists
-            }
-            text
-        }
-    }
+    /** [getBlob] decoded as utf-8 */
+    public suspend fun getText(fileName: String, hash: FileHash): String =
+        getBlob(fileName, hash).toString(Charsets.UTF_8)
 
     /** parses [hash] as an entry index, in either schema 3 or schema 4 */
     public suspend fun getEntries(fileName: String, hash: FileHash): EntryIndex =
@@ -229,19 +208,12 @@ public class RawRemarkableClient internal constructor(
         ),
         fileName = id,
         bytes = bytes,
-        cacheText = null,
     )
-
-    /** hashes [text] locally; on a successful [upload] the text is also cached */
-    public fun stageText(id: String, text: String): StagedFile {
-        val staged = stageFile(id, text.toByteArray(Charsets.UTF_8))
-        return StagedFile(staged.entry, staged.fileName, staged.bytes, cacheText = text)
-    }
 
     /** @throws IllegalArgumentException if [id] does not end in `.content` */
     public fun stageContent(id: String, content: Content): StagedFile {
         require(id.endsWith(CONTENT_SUFFIX)) { "id '$id' did not end with '$CONTENT_SUFFIX'" }
-        return stageText(id, encodeContent(content))
+        return stageFile(id, encodeContent(content).encodeToByteArray())
     }
 
     /**
@@ -259,20 +231,20 @@ public class RawRemarkableClient internal constructor(
 
     /** hashes a template definition locally, ready for [upload] */
     public fun stageTemplate(id: String, definition: TemplateDefinition): StagedFile =
-        stageText(id, encodeWire(TemplateDefinition.serializer(), definition))
+        stageFile(id, encodeWire(TemplateDefinition.serializer(), definition).encodeToByteArray())
 
     /** hashes a page's layer metadata locally, ready for [upload] */
     public fun stagePageMetadata(id: String, metadata: PageMetadata): StagedFile =
-        stageText(id, encodeWire(PageMetadata.serializer(), metadata))
+        stageFile(id, encodeWire(PageMetadata.serializer(), metadata).encodeToByteArray())
 
     /** hashes a page's highlights locally, ready for [upload] */
     public fun stageHighlights(id: String, highlights: List<List<Highlight>>): StagedFile =
-        stageText(id, encodeWire(HighlightsFile.serializer(), HighlightsFile(highlights)))
+        stageFile(id, encodeWire(HighlightsFile.serializer(), HighlightsFile(highlights)).encodeToByteArray())
 
     /** @throws IllegalArgumentException if [id] does not end in `.metadata` */
     public fun stageMetadata(id: String, metadata: Metadata): StagedFile {
         require(id.endsWith(METADATA_SUFFIX)) { "id '$id' did not end with '$METADATA_SUFFIX'" }
-        return stageText(id, encodeWire(Metadata.serializer(), metadata))
+        return stageFile(id, encodeWire(Metadata.serializer(), metadata).encodeToByteArray())
     }
 
     /**
@@ -319,7 +291,6 @@ public class RawRemarkableClient internal constructor(
             ),
             fileName = "$id$SCHEMA_SUFFIX",
             bytes = body,
-            cacheText = null,
         )
     }
 
@@ -337,12 +308,7 @@ public class RawRemarkableClient internal constructor(
         }
         // an existence marker must never replace already-cached text: that would turn a
         // future read of this hash back into a network fetch for no reason
-        val text = staged.cacheText
-        if (text != null) {
-            cache[hash] = CacheEntry.Text(text)
-        } else if (cache[hash] == null) {
-            cache[hash] = CacheEntry.Exists
-        }
+        remember(hash, staged.bytes)
     }
 
     /**
@@ -371,6 +337,15 @@ public class RawRemarkableClient internal constructor(
         ).use { it.body.string() }
         val entry = decodeResponse(NativeSimpleEntry.serializer(), text, "uploaded file")
         return ItemRef(ItemId.ofWire(entry.docID), FileHash.ofWire(entry.hash))
+    }
+
+    /** Keeps a blob whole when it is small enough, and otherwise only that the store has it. */
+    private fun remember(hash: String, bytes: ByteArray) {
+        cache[hash] = if (bytes.size <= maxCachedBlobBytes) {
+            CacheEntry.Body(bytes)
+        } else {
+            CacheEntry.Exists
+        }
     }
 
     internal fun dumpCache(): String = cache.dump()

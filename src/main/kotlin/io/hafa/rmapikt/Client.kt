@@ -435,7 +435,7 @@ public class RemarkableClient internal constructor(
         val staged = listOf(
             rawClient.stageContent("$id$CONTENT_SUFFIX", content),
             rawClient.stageMetadata("$id$METADATA_SUFFIX", metadata),
-            rawClient.stageText("$id$PAGEDATA_SUFFIX", "\n"),
+            rawClient.stageFile("$id$PAGEDATA_SUFFIX", "\n".encodeToByteArray()),
             rawClient.stageFile("$id.${fileType.extension}", bytes),
         )
         val itemEntry = rawClient.stageEntries(id, staged.map { it.entry }, schemaVersion)
@@ -595,9 +595,9 @@ public class RemarkableClient internal constructor(
         // read the raw text rather than the decoded value: a firmware quirk key the api
         // deliberately doesn't model still has to be written back exactly as it arrived
         val original = rawClient.getText(entry.id, entry.hash)
-        val staged = rawClient.stageText(
+        val staged = rawClient.stageFile(
             entry.id,
-            encodeContent(update(decodeContent(original)), contentQuirks(original)),
+            encodeContent(update(decodeContent(original)), contentQuirks(original)).encodeToByteArray(),
         )
         components[index] = staged.entry
 
@@ -769,7 +769,7 @@ public class RemarkableClient internal constructor(
             requireKind(itemRef, EntryType.Document)
             val components = componentEntries(itemRef).toMutableList()
             val fileName = "${item.id}$PAGEDATA_SUFFIX"
-            val staged = rawClient.stageText(fileName, templates.joinToString("") { "$it\n" })
+            val staged = rawClient.stageFile(fileName, templates.joinToString("") { "$it\n" }.encodeToByteArray())
             val index = components.indexOfFirst { it.id == fileName }
             if (index < 0) components.add(staged.entry) else components[index] = staged.entry
             val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
