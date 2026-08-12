@@ -1168,16 +1168,42 @@ class ClientTest {
     }
 
     @Test
-    fun `re-staging a text blob as a plain file does not discard the cached text`() = runTest {
-        val raw = client().raw
-        val text = """{"visibleName":"x"}"""
-        val staged = raw.stageText("doc.metadata", text)
-        raw.upload(staged)
-        raw.upload(raw.stageFile("doc.metadata", text.toByteArray()))
+    fun `a write does not refetch the index it just wrote`() = runTest {
+        val api = client()
+        val ref = api.putPdf("doc", byteArrayOf(1))
+        val before = cloud.requestsFor(SCHEMA_SUFFIX).count { it.method == "GET" }
+
+        api.rename(ref, "renamed")
+        assertEquals(
+            before,
+            cloud.requestsFor(SCHEMA_SUFFIX).count { it.method == "GET" },
+            "the root and item indexes were staged locally, so reading them back is a cache hit",
+        )
+    }
+
+    @Test
+    fun `a blob under the size limit is served from cache, a larger one is refetched`() = runTest {
+        val api = session(
+            SessionToken("session-token"),
+            SessionOptions(
+                rawHost = cloud.host,
+                uploadHost = cloud.host,
+                httpClient = http,
+                maxCachedBlobBytes = 16,
+            ),
+        )
+        val raw = api.raw
+        val small = raw.stageFile("small.rm", ByteArray(16) { 1 })
+        val large = raw.stageFile("large.rm", ByteArray(17) { 2 })
+        raw.upload(small)
+        raw.upload(large)
 
         val before = cloud.received.size
-        assertEquals(text, raw.getText("doc.metadata", staged.entry.hash))
-        assertEquals(before, cloud.received.size, "the text should still be served from cache")
+        assertContentEquals(ByteArray(16) { 1 }, raw.getBlob("small.rm", small.entry.hash))
+        assertEquals(before, cloud.received.size, "the small blob never left the cache")
+
+        assertContentEquals(ByteArray(17) { 2 }, raw.getBlob("large.rm", large.entry.hash))
+        assertEquals(before + 1, cloud.received.size, "the large one is known, not held")
     }
 
     @Test
@@ -1205,7 +1231,7 @@ class ClientTest {
 
     private fun cachedHashes(api: RemarkableClient): Set<String> {
         val dump = Json.parseToJsonElement(api.dumpCache()).jsonObject
-        val text = (dump.getValue("text") as JsonObject).keys
+        val text = (dump.getValue("bodies") as JsonObject).keys
         val exists = (dump.getValue("exists") as JsonArray).map { it.jsonPrimitive.content }
         return text + exists
     }

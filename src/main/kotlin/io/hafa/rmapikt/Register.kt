@@ -11,7 +11,8 @@ import java.util.UUID
 private const val CONNECT_CODE_LENGTH = 8
 
 /** eight million characters, which holds a large account's indexes and metadata */
-private const val DEFAULT_MAX_CACHE_CHARS = 8L * 1024 * 1024
+private const val DEFAULT_MAX_CACHE_BYTES = 8L * 1024 * 1024
+private const val DEFAULT_MAX_CACHED_BLOB_BYTES = 512 * 1024
 
 /**
  * One client, shared by every default-constructed option set.
@@ -106,14 +107,21 @@ public data class SessionOptions(
     /** a previous [RemarkableClient.dumpCache], to start warm */
     public val cache: String? = null,
     /**
-     * the largest the cache may grow, counted in characters of cached text
+     * the largest the cache may grow, in bytes
      *
      * A growth bound rather than a memory budget: it exists so a long-running process does
      * not accumulate cached blobs for as long as it lives, which matters most on the mobile
-     * devices this library supports. Characters are close enough to bytes for the ascii
-     * that entry indexes and json metadata are made of.
+     * devices this library supports.
      */
-    public val maxCacheChars: Long = DEFAULT_MAX_CACHE_CHARS,
+    public val maxCacheBytes: Long = DEFAULT_MAX_CACHE_BYTES,
+    /**
+     * the largest single blob worth keeping whole
+     *
+     * Above this only the hash is remembered, which still skips a re-upload but not a read.
+     * The bound is per blob because one pdf can be larger than [maxCacheBytes] and would
+     * evict everything else to hold itself.
+     */
+    public val maxCachedBlobBytes: Int = DEFAULT_MAX_CACHED_BLOB_BYTES,
     /**
      * how many times a root-mutating operation re-reads and re-applies after losing a race
      *
@@ -226,13 +234,14 @@ public fun session(
     options: SessionOptions = SessionOptions(),
 ): RemarkableClient {
     val cache = options.cache
-        ?.let { runCatching { LruCache.load(it, options.maxCacheChars) }.getOrNull() }
-        ?: LruCache(options.maxCacheChars)
+        ?.let { runCatching { LruCache.load(it, options.maxCacheBytes) }.getOrNull() }
+        ?: LruCache(options.maxCacheBytes)
     val raw = RawRemarkableClient(
         http = AuthedHttp(options.httpClient, sessionToken.value, options.maxTransientRetries),
         cache = cache,
         rawHost = options.rawHost,
         uploadHost = options.uploadHost,
+        maxCachedBlobBytes = options.maxCachedBlobBytes,
     )
     return RemarkableClient(raw, options.maxGenerationRetries)
 }

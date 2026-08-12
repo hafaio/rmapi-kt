@@ -28,7 +28,7 @@ choices behind them.
   `Parent` instead of `""`/`"trash"` magic strings; one explicit `refreshRoot()` rather
   than a `refresh` flag on every method; separate `put*` and `upload*` families because
   they are separate mechanisms; an error taxonomy built around what a caller branches on;
-  a cache with a versioned dump; and strict decoding everywhere (§D4).
+  a cache of bytes with a versioned dump; and strict decoding everywhere (§D4).
 - **Dependencies**: `kotlinx-serialization-json`, `kotlinx-coroutines-core`, and
   **OkHttp**, used directly — the library's only injectable is an
   `OkHttpClient` in `SessionOptions` (timeouts/interceptors/proxies, the established
@@ -169,7 +169,8 @@ public data class SessionOptions(
     val rawHost: String = Hosts.RAW,
     val uploadHost: String = Hosts.UPLOAD,
     val cache: String? = null,                 // a previous dumpCache() (§D9)
-    val maxCacheChars: Long = …,               // characters of cached text
+    val maxCacheBytes: Long = …,               // total cache size
+    val maxCachedBlobBytes: Int = …,           // the largest blob worth keeping whole
     val httpClient: OkHttpClient = OkHttpClient(),
 )
 ```
@@ -531,13 +532,13 @@ internal sealed interface CacheEntry {
 - **Honest encoding**: a sealed `CacheEntry` says what each entry means. Encoding
   "known to exist" as a null value in a string map would make the "never re-upload a known
   hash" path read as an accident of nullability rather than as intent.
-- **The bound is characters, and says so.** `maxCacheChars` counts `String.length` of the
-  key plus the cached text. A byte count was tried and reverted: on the JVM a cached value
-  is a `String`, held as Latin-1 or UTF-16 and never as UTF-8, so a UTF-8 byte count is not
-  what the object costs — it over-counts accented and CJK text while a character count
-  under-counts astral pairs, and neither is the heap figure. Since the bound exists to stop
-  unbounded growth rather than to budget memory, the cheap measure that needs no encoding
-  pass is the right one, and naming it `Chars` avoids claiming a precision it hasn't got.
+- **Values are bytes, and the split is on size rather than kind.** An earlier cache held
+  decoded text, which meant it could only admit a blob that decodes losslessly — so `.rm`
+  pages, the one thing a stroke-editing client reads repeatedly, were fetched every time.
+  Bytes admit every kind, and a caller wanting text decodes on the way out. What is worth
+  holding is then a size question: `maxCachedBlobBytes` bounds a single blob so one pdf
+  cannot evict everything else to hold itself, and anything above it records only that the
+  store has the hash, which still skips a re-upload. `maxCacheBytes` bounds the total.
   For what this cache actually holds — entry indexes and json metadata, almost entirely
   ascii — every candidate measure agrees anyway.
 - **Dump format**: versioned, kotlinx-serialized JSON —
@@ -550,16 +551,9 @@ internal sealed interface CacheEntry {
   The format is this library's own; a cache is a performance artifact, so there is no
   interchange obligation and a cold start costs only a few refetches.
 - **LRU**: insertion-order eviction with get-refresh over
-  `LinkedHashMap(accessOrder = true)`, bounded by `maxCacheChars`, which defaults to a
+  `LinkedHashMap(accessOrder = true)`, bounded by `maxCacheBytes`, which defaults to a
   finite value so a long-running process cannot accumulate blobs indefinitely.
-- **A lossy decode is never cached.** `getText` decodes bytes as utf-8; for input that
-  is not valid utf-8 that substitutes replacement characters and is irreversible. Caching
-  such a decode would let a later `getBlob` of the same hash return a mangled re-encoding,
-  which is how a binary page gets destroyed. This is not hypothetical: a real account
-  contains a `.rm` page destroyed exactly this way — 19,066 replacement sequences, 47% of
-  the file, its hash matching the damaged bytes, so the loss is at rest on the server. The
-  cache therefore keeps a decode
-  as `Text` only when it re-encodes to the original bytes, and as `Exists` otherwise.
+
 - **Thread safety**: all cache access in `synchronized(lock)` blocks — critical
   sections are pure map ops (no suspension, no I/O), so a monitor beats a suspending
   `Mutex`. The benign JS race (two concurrent `getText`s of one hash fetch twice, then
