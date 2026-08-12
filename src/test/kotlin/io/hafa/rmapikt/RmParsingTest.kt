@@ -6,6 +6,7 @@ import java.nio.ByteOrder
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -484,6 +485,25 @@ class RmParsingTest {
             ),
         )
         assertEquals(page, parseRmFile(serializeRmFile(page)))
+    }
+
+    @Test
+    fun `a version 6 page keeps a non-zero reserved header byte`() {
+        val bytes = java.io.ByteArrayOutputStream().apply {
+            val text = "reMarkable .lines file, version=6"
+            write(text.toByteArray(Charsets.US_ASCII))
+            repeat(43 - text.length) { write(' '.code) }
+            write(byteArrayOf(2, 0, 0, 0))  // payload length
+            write(0x7F)                     // the reserved byte, deliberately not zero
+            write(1)                        // min version
+            write(1)                        // current version
+            write(0x0B)                     // block type
+            write(byteArrayOf(9, 9))        // payload
+        }.toByteArray()
+
+        val page = assertIs<RmFile.Scene>(parseRmFile(bytes))
+        assertEquals(0x7F, page.blocks.single().reserved)
+        assertContentEquals(bytes, serializeRmFile(page), "so an untouched page keeps its hash")
     }
 
     @Test

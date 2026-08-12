@@ -685,7 +685,8 @@ costs exactly the pages that were edited. That property is what lets the typed a
 meant keeping two
 words per version 3/5 stroke that the reader previously discarded (`reserved`, and the extra
 word version 5 added); zeroing them would have quietly rewritten every page that carries
-them. A version 6 page is written from its blocks rather than its decoded layers, because
+them, and the byte a version 6 block header reserves, which the writer previously assumed
+was always zero. A version 6 page is written from its blocks rather than its decoded layers, because
 those layers are a view of the blocks and re-encoding them would drop the text, glyphs, and
 history this library frames but does not interpret.
 
