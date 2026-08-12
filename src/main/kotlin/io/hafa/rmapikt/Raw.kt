@@ -258,11 +258,9 @@ public class RawRemarkableClient internal constructor(
         entries: List<RawEntry>,
         schemaVersion: SchemaVersion,
     ): StagedFile {
-        if (id == ROOT_LIST && schemaVersion == SchemaVersion.V3) {
-            System.err.println(
-                "rmapi-kt: writing a schema 3 root index, which reMarkable rejects with a 400 " +
-                    "\"Software must be updated\" error; write the root index with schema 4",
-            )
+        require(id != ROOT_LIST || schemaVersion != SchemaVersion.V3) {
+            "the root index must be schema 4; reMarkable rejects a schema 3 root with a 400 " +
+                "\"Software must be updated\""
         }
         val sorted = entries.sortedBy { it.id }
         val totalSize = sorted.sumOf { it.size }
