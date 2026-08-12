@@ -115,4 +115,30 @@ class HttpTest {
             assertTrue(backoffMillis(attempt = 30, baseMillis = 200) <= 30_000)
         }
     }
+
+    @Test
+    fun `no attempt count produces a bound outside the cap`() {
+        // sweeping, not sampling: the wrap point depends on the base as well as the count
+        for (base in listOf(1L, 25L, 200L, Long.MAX_VALUE / 2, Long.MAX_VALUE)) {
+            for (attempt in 0..200) {
+                val delay = backoffMillis(attempt, base, Random(attempt))
+                assertTrue(delay in 0..30_000, "base $base attempt $attempt gave $delay")
+            }
+        }
+    }
+
+    @Test
+    fun `a base larger than the cap is honoured rather than shrunk`() {
+        // the cap bounds growth; it is not a claim that the caller asked for too much
+        val delay = backoffMillis(0, 60_000L, Random(0))
+        assertTrue(delay <= 30_000, "still bounded by the cap")
+    }
+
+    @Test
+    fun `the bound still grows with the attempt until it reaches the cap`() {
+        val early = backoffMillis(2, 25L, Random(0))
+        val late = backoffMillis(20, 25L, Random(0))
+        assertTrue(early <= 100, "a second attempt is bounded by 25 * 2^2")
+        assertTrue(late > early, "and a later one is not clamped to the same value")
+    }
 }

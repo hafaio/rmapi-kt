@@ -16,6 +16,7 @@ private const val PRECONDITION_FAILED = "{\"message\":\"precondition failed\"}\n
 
 private const val TRANSIENT_BASE_MS = 200L
 private const val BACKOFF_CAP_MS = 30_000L
+
 private const val TOO_MANY_REQUESTS = 429
 private const val FIRST_SERVER_ERROR = 500
 
@@ -32,12 +33,18 @@ private val EMPTY_BODY = ByteArray(0).toRequestBody()
 /**
  * Exponential backoff with full jitter.
  *
- * The jitter is the point: without it every client that failed against the same outage
- * retries in lockstep and reproduces the load that caused it.
+ * Without the jitter, every client that failed against one outage retries in lockstep.
  */
 internal fun backoffMillis(attempt: Int, baseMillis: Long, random: Random = Random): Long {
-    val capped = min(baseMillis shl attempt, BACKOFF_CAP_MS)
+    val capped = min(baseMillis.saturatingShl(attempt), BACKOFF_CAP_MS)
     return random.nextLong(capped + 1)
+}
+
+/** `shl`, but pinned at [Long.MAX_VALUE] where it would wrap; the jvm has no such operator */
+private fun Long.saturatingShl(bits: Int): Long = when {
+    this == 0L -> 0
+    bits >= countLeadingZeroBits() -> Long.MAX_VALUE
+    else -> this shl bits
 }
 
 /**
