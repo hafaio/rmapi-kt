@@ -974,6 +974,40 @@ class ClientTest {
     }
 
     @Test
+    fun `zoom reads back as the sealed type it was written as`() = runTest {
+        val custom = Zoom.Custom(
+            scale = 1.5,
+            centerX = 10.0,
+            centerY = 20.0,
+            pageWidth = 1404.0,
+            pageHeight = 1872.0,
+            orientation = Orientation.Landscape,
+        )
+        val api = client()
+        val ref = api.putPdf("doc", byteArrayOf(1), PutOptions(zoom = custom))
+        assertEquals(custom, api.getDocumentContent(ref).zoom)
+    }
+
+    @Test
+    fun `changing zoom clears the custom numbers it no longer needs`() = runTest {
+        val api = client()
+        val ref = api.putPdf(
+            "doc",
+            byteArrayOf(1),
+            PutOptions(
+                zoom = Zoom.Custom(1.5, 10.0, 20.0, 1404.0, 1872.0, Orientation.Portrait),
+            ),
+        )
+        val content = api.getDocumentContent(ref)
+        val updated = api.setDocumentContent(ref, content.withZoom(Zoom.BestFit))
+
+        val after = api.getDocumentContent(updated)
+        assertEquals(Zoom.BestFit, after.zoom)
+        assertNull(after.customZoomScale, "a stale custom number would outlive its mode")
+        assertNull(after.customZoomOrientation)
+    }
+
+    @Test
     fun `setPagedata refuses a folder`() = runTest {
         val api = client()
         val folder = api.putFolder("a folder")
