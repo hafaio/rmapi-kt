@@ -75,8 +75,9 @@ public value class ItemId(
     /** builds an id from the cloud's own bytes */
     public companion object {
         /**
-         * Parses an id the cloud sent; see [FileHash.ofWire] for why this differs from the
-         * constructor.
+         * Parses an id the cloud sent.
+         *
+         * See [FileHash.ofWire] for why this differs from the constructor.
          *
          * @throws ValidationException if [value] is not a uuid4
          */

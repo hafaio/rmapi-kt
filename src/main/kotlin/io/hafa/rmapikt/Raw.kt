@@ -22,8 +22,10 @@ internal const val METADATA_SUFFIX = ".metadata"
 internal const val RM_SUFFIX = ".rm"
 
 /**
- * Responses are read once and never written back, so an unrecognised field in one costs
- * nothing — unlike the stored files, where dropping a key on the way out would destroy it
+ * Decodes responses leniently, where [wireJson] decodes stored files strictly.
+ *
+ * A response is read once and never written back, so an unrecognised field in one costs
+ * nothing — unlike a stored file, where dropping a key on the way out would destroy it
  * (§D4). Being strict here would break the client the day reMarkable adds a field to a
  * response, in exchange for nothing.
  */

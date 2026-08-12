@@ -108,9 +108,9 @@ public data class DocumentMetadata(
 /** speculative: a record of keyboard use */
 @Serializable
 public data class KeyboardMetadata(
-    /** unknown: */
+    /** unknown */
     public val count: Int,
-    /** unknown: */
+    /** unknown */
     public val timestamp: Double,
 )
 
@@ -173,13 +173,13 @@ public data class CPagePage(
     public val id: String,
     /** unknown: an ordering key; values look like `"aa"`, `"ab"`, `"ba"` */
     public val idx: CPageStringValue,
-    /** unknown: */
+    /** unknown */
     public val redir: CPageNumberValue? = null,
     /** speculative: the page's template name */
     public val template: CPageStringValue? = null,
     /** unknown: the value is an ISO timestamp */
     public val scrollTime: CPageStringValue? = null,
-    /** unknown: */
+    /** unknown */
     public val verticalScroll: CPageNumberValue? = null,
     /** unknown: a page the device treats as deleted */
     public val deleted: CPageNumberValue? = null,
@@ -195,9 +195,9 @@ public data class CPagePage(
 /** unknown: a pair the device stores alongside the page list */
 @Serializable
 public data class CPageUUID(
-    /** unknown: */
+    /** unknown */
     public val first: String,
-    /** unknown: */
+    /** unknown */
     public val second: Int,
 )
 
@@ -206,7 +206,7 @@ public data class CPageUUID(
 public data class CPages(
     /** speculative: when the document was last opened */
     public val lastOpened: CPageStringValue,
-    /** unknown: */
+    /** unknown */
     public val original: CPageNumberValue,
     /** speculative: one entry per page */
     public val pages: List<CPagePage>,
@@ -220,11 +220,10 @@ public data class CPages(
 )
 
 /**
- * the `.content` file of an item
+ * how to render an item
  *
- * The three variants are not tagged on the wire; they are told apart by which keys are
- * present. Templates are not here: their `.content` is empty and their definition lives
- * in a separate `.template` file ([TemplateDefinition]).
+ * The variants are not tagged on the wire; they are told apart by which keys are present.
+ * A template's `.content` is empty, so it has none of these — see [TemplateDefinition].
  */
 public sealed interface Content
 
@@ -286,7 +285,7 @@ public data class DocumentContent(
     public val originalPageCount: Int? = null,
     /** the last page opened, counting from zero */
     public val lastOpenedPage: Int? = null,
-    /** unknown: */
+    /** unknown */
     public val dummyDocument: Boolean? = null,
     /** how the document is scaled to the screen */
     public val zoomMode: ZoomMode? = null,
@@ -313,15 +312,14 @@ public data class DocumentContent(
 ) : Content
 
 /**
- * the `.template` file of a template item
+ * a template's definition, which its empty `.content` does not carry
  *
- * A template's `.content` is empty; everything describing it lives here. The layout is an
- * svg-like dsl in json whose values may be numbers *or* expressions over the declared
+ * The layout is an svg-like dsl in json whose values may be numbers *or* expressions over
  * [constants] — `"templateWidth - (offsetX * 2)"` is a real value — so the parts this
- * library does not interpret stay as raw json rather than take a type they don't fit.
+ * library does not interpret stay raw json rather than take a type they don't fit.
  *
- * Optionality follows what real templates carry rather than what the field names suggest:
- * some omit [supportedScreens], others omit [labels].
+ * Optionality follows what real templates carry, not what the field names suggest: some
+ * omit [supportedScreens], others omit [labels].
  */
 @Serializable
 public data class TemplateDefinition(
@@ -356,12 +354,7 @@ public data class TemplateDefinition(
     public val id: String? = null,
 )
 
-/**
- * the `.metadata` file of an item
- *
- * Where [Content] describes how to render an item, this describes the item itself: its
- * name, where it lives, and when it changed.
- */
+/** the item itself, where [Content] describes how to render it */
 @Serializable
 public data class Metadata(
     /** the name shown on the device */
@@ -386,7 +379,7 @@ public data class Metadata(
     public val metadatamodified: Boolean? = null,
     /** speculative: whether the item has been modified */
     public val modified: Boolean? = null,
-    /** unknown: */
+    /** unknown */
     public val synced: Boolean? = null,
     /** speculative: the metadata version, which every edit bumps */
     public val version: Int? = null,

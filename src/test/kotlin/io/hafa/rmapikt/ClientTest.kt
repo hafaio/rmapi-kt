@@ -78,8 +78,6 @@ class ClientTest {
         .map { it.fileName!!.substringAfterLast('.') }
         .toSet()
 
-    // ---------------- listing ----------------
-
     @Test
     fun `listing an empty account returns nothing`() = runTest {
         assertEquals(emptyMap(), client().metadataByRef())
@@ -131,8 +129,6 @@ class ClientTest {
         assertEquals(1700000000000, metadata.openedAt)
         assertNull(metadata.createdAt, "this item was seeded without a createdTime")
     }
-
-    // ---------------- put ----------------
 
     @Test
     fun `putPdf uploads every component file and commits a new root`() = runTest {
@@ -251,8 +247,6 @@ class ClientTest {
         api.putPdf("child", byteArrayOf(1), PutOptions(parent = Parent.Folder(folder.id)))
         assertEquals(Parent.Folder(folder.id), cloud.uploadedMetadata().parent)
     }
-
-    // ---------------- edits ----------------
 
     @Test
     fun `rename rewrites the name and bumps the metadata version`() = runTest {
@@ -552,8 +546,6 @@ class ClientTest {
         assertEquals(rmPage(2f), api.getPage(updated, "page-b"), "the other page is untouched")
     }
 
-    // ---------------- bulk ----------------
-
     @Test
     fun `bulkMove rewrites many items in a single root write`() = runTest {
         val api = client()
@@ -599,8 +591,6 @@ class ClientTest {
         assertEquals(setOf(absent), result.notFound, "a missing ref must not vanish silently")
     }
 
-    // ---------------- generation conflicts ----------------
-
     @Test
     fun `a lost race is retried and then succeeds`() = runTest {
         val api = client(maxGenerationRetries = 3)
@@ -632,8 +622,6 @@ class ClientTest {
         api.rename(document, "renamed")
         assertEquals(1, cloud.uploads[pdfHash], "the pdf is unchanged by a rename")
     }
-
-    // ---------------- reads ----------------
 
     @Test
     fun `getPdf returns the stored bytes and a missing component is reported`() = runTest {
@@ -821,8 +809,6 @@ class ClientTest {
         assertEquals(2, loaded.constants?.size)
     }
 
-    // ---------------- archives ----------------
-
     @Test
     fun `a document survives an export and import round trip`() = runTest {
         val api = client()
@@ -877,8 +863,6 @@ class ClientTest {
         assertFailsWith<ValidationException> { client().importArchive(empty) }
     }
 
-    // ---------------- upload family ----------------
-
     @Test
     fun `the upload family hands the file to the ingestion endpoint`() = runTest {
         val api = client()
@@ -893,8 +877,6 @@ class ClientTest {
             "ingestion does not touch the root index",
         )
     }
-
-    // ---------------- root and cache ----------------
 
     @Test
     fun `refreshRoot picks up a change made by someone else`() = runTest {
@@ -1007,8 +989,6 @@ class ClientTest {
         )
         assertEquals("renamed", api.getMetadata(api.listRefs().single()).visibleName)
     }
-
-    // ---------------- account shapes ----------------
 
     @Test
     fun `a schema 3 account gets schema 3 item indexes and a schema 4 root`() = runTest {
