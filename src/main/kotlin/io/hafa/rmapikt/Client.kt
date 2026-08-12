@@ -270,26 +270,54 @@ public class RemarkableClient internal constructor(
     }
 
     /**
-     * the undecoded `.rm` page files, keyed by page id
+     * the pen strokes, keyed by page id; order them by [DocumentContent.pages]
      *
-     * These hold the pen strokes, and reMarkable's own notebooks consist of nothing else.
-     * The page ids match [DocumentContent.pages], so the result can be ordered by that
-     * list. Pass each value to [parseRmFile] for the strokes; parsing per page rather than
-     * for the whole document lets one unreadable page be handled without losing the rest.
+     * A reMarkable notebook is nothing else — it has no pdf or epub behind it.
+     *
+     * One unparseable page fails the whole call, which is what makes [setPages] safe: a
+     * document that cannot be read in full is never one this api offers to write back. To
+     * salvage the readable pages of one that fails, walk it through [raw].
+     *
+     * @throws ValidationException if any page is malformed
      */
-    public suspend fun getRawPages(ref: ItemRef): Map<String, ByteArray> = coroutineScope {
+    public suspend fun getPages(ref: ItemRef): Map<String, RmFile> = coroutineScope {
         val prefix = "${ref.id.value}/"
         componentEntries(ref)
             .filter { it.id.startsWith(prefix) && it.id.endsWith(RM_SUFFIX) }
             .map { entry ->
                 async {
                     entry.id.removePrefix(prefix).removeSuffix(RM_SUFFIX) to
-                        rawClient.getBlob(entry.id, entry.hash)
+                        parseRmFile(rawClient.getBlob(entry.id, entry.hash))
                 }
             }
             .awaitAll()
             .toMap()
     }
+
+    /**
+     * one page, or null if nothing has been drawn on it yet
+     *
+     * Costs one blob, where [getPages] downloads the whole document and fails if any *other*
+     * page is malformed.
+     *
+     * A page exists because [DocumentContent.pages] lists it; the device writes its `.rm`
+     * only once something is drawn. So an untouched page is real and empty, not missing.
+     *
+     * @throws ValidationException if the document has no page [pageId]
+     */
+    public suspend fun getPage(ref: ItemRef, pageId: String): RmFile? {
+        val declared = declaredPages(ref)
+        if (pageId !in declared) {
+            throw noSuchPages(ref.id.value, listOf(pageId))
+        }
+        val fileName = "${ref.id.value}/$pageId$RM_SUFFIX"
+        val entry = componentEntries(ref).firstOrNull { it.id == fileName } ?: return null
+        return parseRmFile(rawClient.getBlob(entry.id, entry.hash))
+    }
+
+    /** the page ids the item's `.content` declares; empty for anything but a document */
+    private suspend fun declaredPages(ref: ItemRef): Set<String> =
+        (getContent(ref) as? DocumentContent)?.pages.orEmpty().toSet()
 
     /**
      * every component file of the item, packed into one zip archive
@@ -616,6 +644,63 @@ public class RemarkableClient internal constructor(
         stageMetadataEdit(item, schemaVersion, update)
     }
 
+    /**
+     * rewrites pages the document already has, leaving the rest alone
+     *
+     * Handing back a map from [getPages] uploads only what changed: an unedited page
+     * serialises to the bytes it was read from, so it re-stages to a hash already cached.
+     * A page that has never been drawn on gets its `.rm` created here.
+     *
+     * `lastModified` is not touched — call [setMetadata] too if the document should look
+     * freshly edited.
+     *
+     * @throws ValidationException if [pages] names a page the document does not have. Adding
+     * a page means listing it in [DocumentContent.pages], so that belongs to
+     * [updateDocumentContent].
+     */
+    public suspend fun setPages(
+        ref: ItemRef,
+        pages: Map<String, RmFile>,
+    ): ItemRef = if (pages.isEmpty()) {
+        ref
+    } else {
+        editItem(ref) { item, schemaVersion -> stagePageEdits(item, schemaVersion, pages) }
+    }
+
+    /** the single-page case of [setPages] */
+    public suspend fun setPage(ref: ItemRef, pageId: String, page: RmFile): ItemRef =
+        setPages(ref, mapOf(pageId to page))
+
+    private suspend fun stagePageEdits(
+        item: RawEntry,
+        schemaVersion: SchemaVersion,
+        pages: Map<String, RmFile>,
+    ): Pair<StagedFile, List<StagedFile>> {
+        val itemRef = ItemRef(ItemId(item.id), item.hash)
+        val prefix = "${item.id}/"
+        val components = componentEntries(itemRef).toMutableList()
+        val unknown = pages.keys - declaredPages(itemRef)
+        if (unknown.isNotEmpty()) {
+            throw noSuchPages(item.id, unknown)
+        }
+
+        // a declared page has no `.rm` until something is drawn on it, so a first write adds
+        // an entry where a later one replaces it
+        val existing = components.withIndex()
+            .filter { (_, entry) -> entry.id.startsWith(prefix) && entry.id.endsWith(RM_SUFFIX) }
+            .associate { (index, entry) ->
+                entry.id.removePrefix(prefix).removeSuffix(RM_SUFFIX) to index
+            }
+        val staged = pages.map { (pageId, page) ->
+            rawClient.stageRm("$prefix$pageId$RM_SUFFIX", page).also { file ->
+                val index = existing[pageId]
+                if (index == null) components.add(file.entry) else components[index] = file.entry
+            }
+        }
+        val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
+        return itemIndex to (staged + itemIndex)
+    }
+
     /** moves an item, returning a ref to the moved item */
     public suspend fun move(ref: ItemRef, parent: Parent): ItemRef =
         editMetadata(ref) { it.copy(parent = parent) }
@@ -699,6 +784,12 @@ public class RemarkableClient internal constructor(
             .awaitAll()
     }
 }
+
+/** Reports page ids an item does not declare; shared so a read and a write agree. */
+private fun noSuchPages(itemId: String, pageIds: Collection<String>): Nothing =
+    throw ValidationException(
+        "document '$itemId' has no page ${pageIds.sorted().joinToString()}",
+    )
 
 /**
  * Narrows decoded content to the variant the caller asked to edit.

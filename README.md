@@ -63,14 +63,14 @@ val ref = api.listRefs().first { api.getMetadata(it).type == EntryType.Document 
 val pdf = api.getPdf(ref)                 // ComponentNotFoundException if it has none
 val metadata = api.getMetadata(ref)
 val template = api.getTemplate(ref)       // a template item's .template definition
-val pages = api.getRawPages(ref)          // undecoded .rm files, by page id
+val pages = api.getPages(ref)             // parsed .rm pages, by page id
 ```
 
 Strokes come back the same way whichever firmware wrote the page:
 
 ```kotlin
-for ((pageId, bytes) in api.getRawPages(ref)) {
-    for (layer in parseRmFile(bytes).layers) {
+for ((pageId, page) in api.getPages(ref)) {
+    for (layer in page.layers) {
         for (stroke in layer.strokes) {
             println("$pageId ${layer.name} ${stroke.pen} ${stroke.points.size} points")
         }
@@ -84,20 +84,38 @@ same `layers` plus every raw `block`: a v6 page also carries text, glyphs, and e
 history that this library frames but does not interpret, and keeps rather than discards.
 
 Parsing is strict throughout — a truncated stroke or a malformed block raises
-`ValidationException` rather than yielding partial garbage. Erased strokes are dropped, as
-the device records them as tombstones with no stroke data.
+`ValidationException` rather than yielding partial garbage, and one bad page fails the whole
+`getPages` call. Erased strokes are dropped, as the device records them as tombstones with no
+stroke data. If a document does have a page this library can't read, its bytes are still
+reachable through `api.raw` — undecoded bytes are that tier's currency, not this one's.
 
-Pages can be written back as well:
+Pages are written back the same way they are read, so an edit is a `mapValues`:
 
 ```kotlin
-val page = parseRmFile(bytes)
-val staged = api.raw.stageRm("$pageId.rm", page)   // hashes locally, sends nothing
-api.raw.upload(staged)
+val edited = api.getPages(ref).mapValues { (_, page) -> recolour(page) }
+val updated = api.setPages(ref, edited)
 ```
 
-An untouched page re-serialises to the identical bytes, so it keeps its hash and the upload
-is skipped entirely. A version 6 page is written from its `blocks`; its `layers` are a
-decoded view of those, so editing `layers` and writing the result back changes nothing.
+Only the pages that actually changed are uploaded: an unedited page serialises back to the
+bytes it was read from, so it re-stages to the hash reading it already cached. Pages the
+document doesn't already have are refused rather than written — adding one means listing it in
+the `.content` too, which is `updateDocumentContent`.
+
+A single page has its own pair, and `getPage` is the one that matters: it fetches one blob
+rather than the whole document, and fails only if *that* page is malformed.
+
+```kotlin
+val page = api.getPage(ref, pageId)             // null if nothing is drawn on it yet
+api.setPage(ref, pageId, recolour(page ?: blankPage))
+```
+
+A page exists because the `.content` lists it, not because it has a `.rm` file — the device
+writes that file the first time something is drawn. So `getPage` returns null for a real but
+empty page and only errors on a page id the document doesn't have, and writing to an empty
+page is how it gets its first strokes.
+
+A version 6 page is written from its `blocks`; its `layers` are a decoded view of those, so
+editing `layers` and writing the result back changes nothing.
 
 ### Writing
 

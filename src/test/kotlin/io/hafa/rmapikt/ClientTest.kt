@@ -405,6 +405,151 @@ class ClientTest {
         assertTrue("Collection" in error.message.orEmpty(), error.message.orEmpty())
     }
 
+    @Test
+    fun `setPages rewrites the pages it names and leaves the rest alone`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to serializeRmFile(rmPage(2f)),
+                "page-a-metadata.json" to "{}".toByteArray(),
+            ),
+        )
+        val api = client()
+        val updated = api.setPages(ref, mapOf("page-a" to rmPage(7f)))
+
+        val pages = api.getPages(updated)
+        assertEquals(rmPage(7f), pages.getValue("page-a"))
+        assertEquals(rmPage(2f), pages.getValue("page-b"), "an unnamed page is untouched")
+        assertTrue(
+            cloud.itemEntries(updated.hash.hex).any { it.id.endsWith("page-a-metadata.json") },
+            "a sibling file survives the index rewrite",
+        )
+        assertEquals("a notebook", api.getMetadata(updated).visibleName, "metadata is untouched")
+    }
+
+    @Test
+    fun `a read, an edit and a write compose without touching bytes`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a")),
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        val api = client()
+
+        val recoloured = api.getPages(ref).mapValues { (_, file) ->
+            val lines = assertIs<RmFile.Lines>(file)
+            lines.copy(
+                layers = lines.layers.map { layer ->
+                    layer.copy(strokes = layer.strokes.map { it.copy(colorRaw = RmColor.Blue.raw) })
+                },
+            )
+        }
+        val updated = api.setPages(ref, recoloured)
+
+        val stroke = assertIs<RmFile.Lines>(api.getPages(updated).getValue("page-a"))
+            .layers.single().strokes.single()
+        assertEquals(RmColor.Blue, stroke.color)
+        assertEquals(RmPen.FinelinerV5, stroke.pen, "the rest of the stroke round-tripped")
+        assertEquals(1f, stroke.points.single().x)
+    }
+
+    @Test
+    fun `writing back a whole page map only uploads the pages that changed`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to serializeRmFile(rmPage(2f)),
+            ),
+        )
+        val api = client()
+        val pages = api.getPages(ref).toMutableMap()
+        pages["page-a"] = rmPage(7f)
+        api.setPages(ref, pages)
+
+        val written = cloud.requestsFor(".rm").filter { it.method == "PUT" }
+        assertEquals(1, written.size, "an unedited page re-serialised to the hash it was read from")
+        assertTrue(written.single().fileName!!.endsWith("page-a.rm"), "and page-a is the one sent")
+        assertContentEquals(serializeRmFile(rmPage(7f)), written.single().body)
+    }
+
+    @Test
+    fun `setPages writes the first strokes onto a declared blank page`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "blank")),
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        val api = client()
+        val updated = api.setPage(ref, "blank", rmPage(7f))
+
+        assertEquals(rmPage(7f), api.getPage(updated, "blank"))
+        assertEquals(rmPage(1f), api.getPage(updated, "page-a"), "the drawn page is untouched")
+        assertEquals(setOf("page-a", "blank"), api.getPages(updated).keys)
+    }
+
+    @Test
+    fun `setPages refuses a page the document does not declare`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a")),
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        val error = assertFailsWith<ValidationException> {
+            client().setPages(ref, mapOf("page-z" to rmPage(2f)))
+        }
+        assertTrue("page-z" in error.message.orEmpty(), error.message.orEmpty())
+    }
+
+    @Test
+    fun `one bad page id in a batch writes none of them`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to serializeRmFile(rmPage(2f)),
+            ),
+        )
+        val api = client()
+        val error = assertFailsWith<ValidationException> {
+            api.setPages(ref, mapOf("page-a" to rmPage(7f), "page-z" to rmPage(8f)))
+        }
+        assertTrue("page-z" in error.message.orEmpty(), error.message.orEmpty())
+        assertTrue(cloud.received.none { it.method == "PUT" }, "the valid page is not written")
+        assertEquals(rmPage(1f), api.getPage(ref, "page-a"), "and the document is unchanged")
+    }
+
+    @Test
+    fun `setPages with nothing to write makes no request at all`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a")),
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        assertEquals(ref, client().setPages(ref, emptyMap()))
+        assertTrue(cloud.received.none { it.method == "PUT" })
+    }
+
+    @Test
+    fun `setPage rewrites the one page it names`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to serializeRmFile(rmPage(2f)),
+            ),
+        )
+        val api = client()
+        val updated = api.setPage(ref, "page-a", rmPage(7f))
+        assertEquals(rmPage(7f), api.getPage(updated, "page-a"))
+        assertEquals(rmPage(2f), api.getPage(updated, "page-b"), "the other page is untouched")
+    }
+
     // ---------------- bulk ----------------
 
     @Test
@@ -523,23 +668,39 @@ class ClientTest {
     }
 
     @Test
-    fun `getRawPages returns each page's bytes keyed by page id`() = runTest {
-        val firstPage = byteArrayOf(0x72, 0x65, 0x4D, 0x61, 0x72, 0x6B)
-        val secondPage = byteArrayOf(9, 9, 9)
+    fun `getPages returns each page keyed by page id`() = runTest {
         val ref = cloud.seed(
             documentMetadata("a notebook"),
             documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
             extraFiles = mapOf(
-                "page-a.rm" to firstPage,
-                "page-b.rm" to secondPage,
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to serializeRmFile(rmPage(2f)),
                 // per-page json is not a stroke file
                 "page-a-metadata.json" to "{}".toByteArray(),
             ),
         )
-        val pages = client().getRawPages(ref)
+        val pages = client().getPages(ref)
         assertEquals(setOf("page-a", "page-b"), pages.keys)
-        assertContentEquals(firstPage, pages.getValue("page-a"))
-        assertContentEquals(secondPage, pages.getValue("page-b"))
+        assertEquals(rmPage(1f), pages.getValue("page-a"))
+        assertEquals(rmPage(2f), pages.getValue("page-b"))
+    }
+
+    @Test
+    fun `getPages fails the whole document when one page is unreadable`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to byteArrayOf(9, 9, 9),
+            ),
+        )
+        assertFailsWith<ValidationException> { client().getPages(ref) }
+
+        // the bytes remain reachable through the tier whose currency they are
+        val entries = client().raw.getEntries("${ref.id.value}$SCHEMA_SUFFIX", ref.hash).entries
+        val page = entries.single { it.id.endsWith("page-b.rm") }
+        assertContentEquals(byteArrayOf(9, 9, 9), client().raw.getBlob(page.id, page.hash))
     }
 
     @Test
@@ -567,11 +728,60 @@ class ClientTest {
             documentContent(FileType.Notebook).copy(pages = listOf("page-a")),
             extraFiles = mapOf("page-a.rm" to page),
         )
-        val parsed = client().parsedPages(ref)
+        val parsed = client().getPages(ref)
         val stroke = assertIs<RmFile.Lines>(parsed.getValue("page-a"))
             .layers.single().strokes.single()
         assertEquals(RmPen.Fineliner, stroke.pen)
         assertEquals(3f, stroke.points.single().x)
+    }
+
+    @Test
+    fun `getPage fetches only the page asked for`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to serializeRmFile(rmPage(2f)),
+            ),
+        )
+        assertEquals(rmPage(2f), client().getPage(ref, "page-b"))
+        assertEquals(1, cloud.requestsFor(".rm").size, "page-a was never downloaded")
+    }
+
+    @Test
+    fun `getPage survives a document another page has broken`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-b.rm" to byteArrayOf(9, 9, 9),
+            ),
+        )
+        assertFailsWith<ValidationException> { client().getPages(ref) }
+        assertEquals(rmPage(1f), client().getPage(ref, "page-a"), "the readable page still reads")
+    }
+
+    @Test
+    fun `getPage reports a page the document does not declare`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a")),
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        val error = assertFailsWith<ValidationException> { client().getPage(ref, "page-z") }
+        assertTrue("page-z" in error.message.orEmpty(), error.message.orEmpty())
+    }
+
+    @Test
+    fun `getPage returns null for a declared page nothing has been drawn on`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "blank")),
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        assertNull(client().getPage(ref, "blank"), "a page with no strokes yet is not an error")
     }
 
     @Test
@@ -851,5 +1061,19 @@ class ClientTest {
 private suspend fun RemarkableClient.metadataByRef(): Map<ItemRef, Metadata> =
     listRefs().associateWith { getMetadata(it) }
 
-private suspend fun RemarkableClient.parsedPages(ref: ItemRef): Map<String, RmFile> =
-    getRawPages(ref).mapValues { (_, bytes) -> parseRmFile(bytes) }
+/** a one-stroke page, distinguishable from another by [x] */
+private fun rmPage(x: Float): RmFile.Lines = RmFile.Lines(
+    version = 5,
+    layers = listOf(
+        RmLayer(
+            listOf(
+                RmStroke(
+                    penRaw = RmPen.FinelinerV5.raw,
+                    colorRaw = RmColor.Black.raw,
+                    width = 2.0f,
+                    points = listOf(RmPoint(x, 2f, 3f, 4f, 5f, 6f)),
+                ),
+            ),
+        ),
+    ),
+)
