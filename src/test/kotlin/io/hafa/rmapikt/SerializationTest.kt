@@ -290,4 +290,20 @@ class SerializationTest {
         }
         assertEquals("not json at all", error.rawText)
     }
+
+    @Test
+    fun `the nested modifed key survives a decode and a rewrite`() {
+        val json = """
+            {"coverPageNumber":0,"documentMetadata":{},"extraMetadata":{},"fileType":"pdf",
+             "fontName":"","lineHeight":-1,"orientation":"portrait","pageCount":1,
+             "textAlignment":"","textScale":1,
+             "cPages":{"lastOpened":{"timestamp":"1:1","value":"x"},
+              "original":{"timestamp":"1:1","value":-1},"uuids":[],
+              "pages":[{"id":"p1","idx":{"timestamp":"1:1","value":"ba"},
+               "modifed":"1700000000000"}]}}
+        """.trimIndent()
+        val decoded = assertIs<DocumentContent>(decodeContent(json))
+        assertEquals("1700000000000", decoded.cPages?.pages?.single()?.modifed)
+        assertTrue("\"modifed\"" in encodeContent(decoded), "and goes back out unchanged")
+    }
 }
