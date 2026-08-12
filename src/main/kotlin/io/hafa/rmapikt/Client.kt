@@ -628,6 +628,47 @@ public class RemarkableClient internal constructor(
     }
 
     /**
+     * writes a template's `.template`
+     *
+     * The counterpart of [getTemplate]. A template's `.content` is empty, so this is the
+     * whole of what the device renders it from.
+     *
+     * @throws ValidationException if the item at [ref] is not a template
+     */
+    public suspend fun setTemplate(ref: ItemRef, definition: TemplateDefinition): ItemRef =
+        editItem(ref) { item, schemaVersion ->
+            stageTemplateEdit(item, schemaVersion, definition)
+        }
+
+    private suspend fun stageTemplateEdit(
+        item: RawEntry,
+        schemaVersion: SchemaVersion,
+        definition: TemplateDefinition,
+    ): Pair<StagedFile, List<StagedFile>> {
+        val itemRef = ItemRef(ItemId(item.id), item.hash)
+        val metadata = getMetadata(itemRef)
+        if (metadata.type != EntryType.Template) {
+            throw ValidationException(
+                "expected a Template at '${item.hash.hex}' but found a ${metadata.type.name}",
+            )
+        }
+
+        val components = componentEntries(itemRef).toMutableList()
+        val index = components.indexOfFirst { it.id.endsWith(TEMPLATE_SUFFIX) }
+        if (index < 0) {
+            throw ComponentNotFoundException(itemRef, DocumentComponent.Template)
+        }
+        val staged = rawClient.stageText(
+            components[index].id,
+            encodeWire(TemplateDefinition.serializer(), definition),
+        )
+        components[index] = staged.entry
+
+        val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
+        return itemIndex to listOf(staged, itemIndex)
+    }
+
+    /**
      * writes an item's `.metadata`
      *
      * The general form of [move], [rename] and [star], and the only way to reach the rest of

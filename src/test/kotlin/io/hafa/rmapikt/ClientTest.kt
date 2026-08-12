@@ -775,6 +775,64 @@ class ClientTest {
     }
 
     @Test
+    fun `raw getRm parses a page, mirroring raw stageRm`() = runTest {
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a")),
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        val raw = client().raw
+        val entry = raw.getEntries("${ref.id.value}$SCHEMA_SUFFIX", ref.hash)
+            .entries.single { it.id.endsWith("page-a.rm") }
+        assertEquals(rmPage(1f), raw.getRm(entry.id, entry.hash))
+    }
+
+    @Test
+    fun `setTemplate rewrites a template's definition`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val definition = """
+            {"name":"grid","author":"reMarkable","iconData":"c3Zn","categories":["Planning"],
+             "orientation":"portrait","templateVersion":"1.0.0","formatVersion":1,
+             "items":[{"type":"line"}]}
+        """.trimIndent()
+        val ref = cloud.seed(
+            Metadata(
+                visibleName = "a template",
+                parent = Parent.Root,
+                pinned = false,
+                type = EntryType.Template,
+                lastModified = "1700000000000",
+            ),
+            CollectionContent(),
+            id = id,
+            extraFiles = mapOf("$id.template" to definition.toByteArray()),
+        )
+        val api = client()
+        val updated = api.setTemplate(ref, api.getTemplate(ref).copy(name = "dots"))
+
+        assertEquals("dots", api.getTemplate(updated).name)
+        assertEquals("reMarkable", api.getTemplate(updated).author, "the rest round-trips")
+    }
+
+    @Test
+    fun `setTemplate refuses an item that is not a template`() = runTest {
+        val api = client()
+        val document = api.putPdf("doc", byteArrayOf(1))
+        val template = TemplateDefinition(
+            name = "grid",
+            author = "reMarkable",
+            iconData = "c3Zn",
+            categories = listOf("Planning"),
+            orientation = Orientation.Portrait,
+            templateVersion = "1.0.0",
+            items = listOf(JsonObject(emptyMap())),
+            formatVersion = 1,
+        )
+        val error = assertFailsWith<ValidationException> { api.setTemplate(document, template) }
+        assertTrue("Document" in error.message.orEmpty(), error.message.orEmpty())
+    }
+
+    @Test
     fun `a template is identified by its metadata and read from its template file`() = runTest {
         val id = java.util.UUID.randomUUID().toString()
         val definition = """
