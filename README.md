@@ -130,6 +130,13 @@ val moved = api.move(starred, Parent.Folder(folder.id))
 api.trash(moved)                                // there is no hard delete
 ```
 
+A template's definition is read and written the same way, and is the whole of what the
+device renders it from — a template's `.content` is empty:
+
+```kotlin
+api.setTemplate(ref, api.getTemplate(ref).copy(name = "dots"))
+```
+
 `move`, `rename` and `star` are the named cases of `setMetadata`, which reaches the rest of
 `Metadata` — `lastOpenedPage`, `deleted`, `source`. Every write takes a value, so a change is
 a read, a `copy`, and a write:
