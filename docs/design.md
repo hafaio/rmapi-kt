@@ -670,8 +670,13 @@ runs. Mocking the client instead tests the mock's idea of the protocol. Decorati
 honest cost, and it lands where it belongs: `SessionOptions.httpClient` exposes OkHttp, so
 logging, caching, and extra retries are interceptors rather than 31 delegating methods.
 
-**One identity currency.** Reads and edits both take an `ItemRef`, which pairs an `ItemId`
-with a `FileHash`, and every edit returns a new one. An item's hash changes on every write,
+**One identity currency, and both halves are load-bearing.** Reads and edits both take an
+`ItemRef`, which pairs an `ItemId` with a `FileHash`, and every edit returns a new one. An
+edit locates its item by *both*: under schema 3 an index is hashed from its entries' hashes
+and not their ids, so two items whose component blobs happen to match hash identically, and
+a hash-only lookup would edit whichever the root listed first. Matching on the pair also
+means a ref assembled from two different items is rejected rather than silently applied to
+one of them. An item's hash changes on every write,
 so returning a bare hash would make the caller reassemble the pair by hand — reintroducing
 exactly the transposition mistake `ItemRef` exists to prevent. A chain of edits therefore
 needs no bookkeeping:
