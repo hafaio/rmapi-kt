@@ -18,7 +18,8 @@ class RegisterTest {
     private val authHost get() = server.url("/").toString().removeSuffix("/")
     // see ClientTest: a per-test client, so no connection pool outlives its server
     private val http = okhttp3.OkHttpClient()
-    private val emptyCacheDump = """{"version":1,"text":{},"exists":[]}"""
+    private val emptyCacheDump =
+        """{"version":2,"encoding":"base64","bodies":{},"exists":[]}"""
 
     @AfterTest
     fun shutdown() {

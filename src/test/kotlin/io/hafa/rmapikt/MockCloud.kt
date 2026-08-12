@@ -249,4 +249,5 @@ internal fun stagingClient(): RawRemarkableClient = RawRemarkableClient(
     LruCache(Long.MAX_VALUE),
     "http://unused",
     "http://unused",
+    Int.MAX_VALUE,
 )

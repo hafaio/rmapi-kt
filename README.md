@@ -227,7 +227,8 @@ val api = session(sessionToken, SessionOptions(
     maxTransientRetries = 3,                     // network errors, 5xx, 429
     maxGenerationRetries = 10,                   // lost races against another client
     cache = previousDump,                        // from dumpCache(); discarded if unreadable
-    maxCacheChars = 8 * 1024 * 1024,             // a growth bound, not a memory budget
+    maxCacheBytes = 8 * 1024 * 1024,             // a growth bound, not a memory budget
+    maxCachedBlobBytes = 512 * 1024,             // above this, only the hash is remembered
 ))
 ```
 
