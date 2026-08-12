@@ -1015,21 +1015,20 @@ class ClientTest {
     }
 
     @Test
-    fun `importArchive can override the name, parent, and id`() = runTest {
+    fun `importArchive can override the name and parent, and always mints an id`() = runTest {
         val api = client()
         val folder = api.putFolder("dest")
-        val archive = api.exportArchive(api.putPdf("original", byteArrayOf(1)))
+        val original = api.putPdf("original", byteArrayOf(1))
+        val archive = api.exportArchive(original)
 
-        val keepId = ItemId(java.util.UUID.randomUUID().toString())
         val restored = api.importArchive(
             archive,
             ImportOptions(
                 parent = Parent.Folder(folder.id),
                 visibleName = "renamed on restore",
-                id = keepId,
             ),
         )
-        assertEquals(keepId, restored.id)
+        assertNotEquals(original.id, restored.id, "a restore is a new item, never the old one")
         val metadata = api.getMetadata(restored)
         assertEquals("renamed on restore", metadata.visibleName)
         assertEquals(Parent.Folder(folder.id), metadata.parent)
