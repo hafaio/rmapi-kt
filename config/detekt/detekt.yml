@@ -18,6 +18,14 @@ comments:
   UndocumentedPublicProperty:
     active: false
 
+potential-bugs:
+  # Only reports under type resolution (detektMain/detektTest), where it is wrong: it
+  # flags eleven statements this codebase demonstrably executes, every one covered by a
+  # passing test. Genuine unreachable code is a Kotlin compiler warning, and
+  # allWarningsAsErrors already makes that a build failure -- a stricter gate than this.
+  UnreachableCode:
+    active: false
+
 naming:
   # Files are named by concept (Client, Cloud, Protocol, ...), not after a single
   # top-level declaration.

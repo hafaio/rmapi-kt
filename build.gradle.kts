@@ -85,7 +85,44 @@ kover {
     }
 }
 
+// detekt's comments ruleset gates whether a public declaration is documented, but nothing in
+// it gates the shape. A KDoc that opens with a paragraph has no summary for Dokka to show in
+// an index, so a multi-line one must lead with a single line and then break.
+val checkKdocSummaries by tasks.registering {
+    val sources = fileTree("src/main/kotlin") { include("**/*.kt") }
+    inputs.files(sources)
+    outputs.upToDateWhen { true }
+    doLast {
+        val offences = sources.files.sorted().flatMap { file ->
+            val lines = file.readLines()
+            val bad = mutableListOf<String>()
+            var index = 0
+            while (index < lines.size) {
+                val opener = lines[index].trim()
+                if (opener.startsWith("/**") && !opener.endsWith("*/")) {
+                    val body = lines.asSequence()
+                        .drop(index + 1)
+                        .takeWhile { it.trim() != "*/" }
+                        .map { it.trim() }
+                        .toList()
+                    if (body.size >= 2 && body[1] != "*") {
+                        bad += "${file.path}:${index + 1}: multi-line KDoc without a one-line " +
+                            "summary followed by a blank line"
+                    }
+                    index += body.size + 1
+                }
+                index++
+            }
+            bad
+        }
+        if (offences.isNotEmpty()) {
+            throw GradleException(offences.joinToString("\n", prefix = "\n"))
+        }
+    }
+}
+
 tasks.check {
+    dependsOn(checkKdocSummaries)
     dependsOn(tasks.named("koverVerify"))
     // so a broken KDoc link fails CI, which runs `build` and nothing else
     dependsOn(tasks.named("dokkaGeneratePublicationHtml"))
