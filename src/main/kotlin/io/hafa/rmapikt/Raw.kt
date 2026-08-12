@@ -425,7 +425,6 @@ private fun parseEntryLine(line: String): RawEntry {
     if (fields.size != ENTRY_FIELD_COUNT) {
         malformed(line, "index line '$line' was not formatted correctly")
     }
-    // the line is a five-tuple; naming the fields is what makes reading them checkable, and
     // a wire layout cannot reorder the way the data class this rule guards would
     @Suppress("DestructuringDeclarationWithTooManyEntries")
     val (hash, type, id, subfiles, size) = fields
