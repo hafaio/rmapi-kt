@@ -130,6 +130,12 @@ val moved = api.move(starred, Parent.Folder(folder.id))
 api.trash(moved)                                // there is no hard delete
 ```
 
+Layer names live beside each page, and their order matches `RmFile.layers`:
+
+```kotlin
+api.getPageMetadata(ref, pageId)?.layers?.map { it.name }
+```
+
 Highlights on a pdf or epub are stored per page, and come back as a list of lists — one
 fragment per line a passage spans:
 

@@ -719,6 +719,32 @@ public class RemarkableClient internal constructor(
     ): ItemRef = setHighlights(ref, mapOf(pageId to highlights))
 
     /**
+     * every page's layer metadata, keyed by page id
+     *
+     * Only pages that carry a metadata file appear; a page whose layers have never been
+     * named has none. The layer order matches [RmFile.layers].
+     */
+    public suspend fun getPageMetadata(ref: ItemRef): Map<String, PageMetadata> =
+        pagedFiles(ref, PagedFile.LayerMetadata)
+
+    /** one page's layer metadata, or null if it has none; see [getPageMetadata] */
+    public suspend fun getPageMetadata(ref: ItemRef, pageId: String): PageMetadata? =
+        pagedFile(ref, pageId, PagedFile.LayerMetadata)
+
+    /** writes the layer metadata of the pages named, leaving the rest alone */
+    public suspend fun setPageMetadata(
+        ref: ItemRef,
+        metadata: Map<String, PageMetadata>,
+    ): ItemRef = setPagedFiles(ref, metadata, PagedFile.LayerMetadata)
+
+    /** the single-page case of [setPageMetadata] */
+    public suspend fun setPageMetadata(
+        ref: ItemRef,
+        pageId: String,
+        metadata: PageMetadata,
+    ): ItemRef = setPageMetadata(ref, mapOf(pageId to metadata))
+
+    /**
      * Describes a file a document keeps once per page.
      *
      * A page exists because [DocumentContent.pages] lists it. Whether it has any given one
@@ -936,6 +962,17 @@ internal sealed class PagedFile<T>(private val suffix: String) {
 
         override fun stage(raw: RawRemarkableClient, id: String, value: List<List<Highlight>>) =
             raw.stageHighlights(id, value)
+    }
+
+    /** layer names, `<docId>/<pageId>-metadata.json`, beside the page's own `.rm` */
+    object LayerMetadata : PagedFile<PageMetadata>(PAGE_METADATA_SUFFIX) {
+        override fun prefix(docId: String): String = "$docId/"
+
+        override suspend fun read(raw: RawRemarkableClient, fileName: String, hash: FileHash) =
+            raw.getPageMetadata(fileName, hash)
+
+        override fun stage(raw: RawRemarkableClient, id: String, value: PageMetadata) =
+            raw.stagePageMetadata(id, value)
     }
 }
 

@@ -21,6 +21,7 @@ internal const val CONTENT_SUFFIX = ".content"
 internal const val METADATA_SUFFIX = ".metadata"
 internal const val RM_SUFFIX = ".rm"
 internal const val HIGHLIGHTS_SUFFIX = ".highlights"
+internal const val PAGE_METADATA_SUFFIX = "-metadata.json"
 internal const val TEMPLATE_SUFFIX = ".template"
 
 /**
@@ -208,6 +209,10 @@ public class RawRemarkableClient internal constructor(
     public suspend fun getHighlights(fileName: String, hash: FileHash): List<List<Highlight>> =
         decodeWire(HighlightsFile.serializer(), getText(fileName, hash), "highlights").highlights
 
+    /** parses [hash] as a page's layer metadata; the counterpart of [stagePageMetadata] */
+    public suspend fun getPageMetadata(fileName: String, hash: FileHash): PageMetadata =
+        decodeWire(PageMetadata.serializer(), getText(fileName, hash), "page metadata")
+
     /** hashes [bytes] locally, ready for [upload] */
     public fun stageFile(id: String, bytes: ByteArray): StagedFile = StagedFile(
         entry = RawEntry(
@@ -250,6 +255,10 @@ public class RawRemarkableClient internal constructor(
     /** hashes a template definition locally, ready for [upload] */
     public fun stageTemplate(id: String, definition: TemplateDefinition): StagedFile =
         stageText(id, encodeWire(TemplateDefinition.serializer(), definition))
+
+    /** hashes a page's layer metadata locally, ready for [upload] */
+    public fun stagePageMetadata(id: String, metadata: PageMetadata): StagedFile =
+        stageText(id, encodeWire(PageMetadata.serializer(), metadata))
 
     /** hashes a page's highlights locally, ready for [upload] */
     public fun stageHighlights(id: String, highlights: List<List<Highlight>>): StagedFile =
