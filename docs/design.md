@@ -749,7 +749,12 @@ api.move(starred, Parent.Folder(folder.id))
 type rather than `""`/`"trash"` strings. `DeviceToken` and `SessionToken` are distinct value
 classes, so passing the wrong one is a compile error rather than a confusing runtime
 rejection. `Zoom` is sealed, so a custom fit carries all six of its numbers or none of them,
-instead of an enum sitting beside six independently-optional fields.
+instead of an enum sitting beside six independently-optional fields. It reads both ways:
+`DocumentContent.zoom` projects the flat wire fields back into the sealed type, returning
+null for the one state the wire can hold and it cannot — `customFit` without all six numbers
+— and `withZoom` writes all seven fields together, so changing the mode cannot leave stale
+`customZoom*` values behind. An input-only sealed type would have forced anyone editing an
+existing document to assemble by hand the shape it exists to prevent.
 
 **Bulk operations report what they did not do.** `bulkMove` returns a
 `BulkResult` with both `moved` and `notFound`. Losing a race with another client is normal,
