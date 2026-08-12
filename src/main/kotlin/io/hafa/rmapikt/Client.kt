@@ -305,7 +305,7 @@ public class RemarkableClient internal constructor(
     public suspend fun getPage(ref: ItemRef, pageId: String): RmFile? {
         val declared = declaredPages(ref)
         if (pageId !in declared) {
-            throw noSuchPages(ref.id.value, listOf(pageId))
+            noSuchPages(ref.id.value, listOf(pageId))
         }
         val fileName = "${ref.id.value}/$pageId$RM_SUFFIX"
         val entry = componentEntries(ref).firstOrNull { it.id == fileName } ?: return null
@@ -683,7 +683,7 @@ public class RemarkableClient internal constructor(
         val components = componentEntries(itemRef).toMutableList()
         val unknown = pages.keys - declaredPages(itemRef)
         if (unknown.isNotEmpty()) {
-            throw noSuchPages(item.id, unknown)
+            noSuchPages(item.id, unknown)
         }
 
         // a declared page has no `.rm` until something is drawn on it, so a first write adds

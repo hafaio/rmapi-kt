@@ -39,7 +39,7 @@ class RegisterTest {
         assertEquals("POST", request.method)
         assertEquals("Bearer", request.headers["Authorization"], "registration is unauthenticated")
 
-        val body = Json.parseToJsonElement(request.body?.utf8() ?: "") as JsonObject
+        val body = Json.parseToJsonElement(request.body?.utf8().orEmpty()) as JsonObject
         assertEquals(JsonPrimitive("abcdefgh"), body["code"])
         assertEquals(JsonPrimitive("browser-chrome"), body["deviceDesc"])
         assertTrue(
@@ -59,7 +59,7 @@ class RegisterTest {
             authHost = authHost,
             httpClient = http,
         )
-        val body = Json.parseToJsonElement(server.takeRequest().body?.utf8() ?: "") as JsonObject
+        val body = Json.parseToJsonElement(server.takeRequest().body?.utf8().orEmpty()) as JsonObject
         assertEquals(JsonPrimitive("mobile-android"), body["deviceDesc"])
         assertEquals(JsonPrimitive("11111111-2222-3333-4444-555555555555"), body["deviceID"])
     }
