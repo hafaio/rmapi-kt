@@ -130,6 +130,12 @@ val moved = api.move(starred, Parent.Folder(folder.id))
 api.trash(moved)                                // there is no hard delete
 ```
 
+`.pagedata` names the template behind each page, positionally:
+
+```kotlin
+api.setPagedata(ref, listOf("Grid", "", "Dots"))   // middle page has no template
+```
+
 Layer names live beside each page, and their order matches `RmFile.layers`:
 
 ```kotlin

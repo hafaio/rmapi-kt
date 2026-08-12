@@ -788,6 +788,33 @@ class ClientTest {
     }
 
     @Test
+    fun `getPagedata reads one template name per page and drops the trailing blank`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            id = id,
+            extraFiles = mapOf("$id.pagedata" to "Grid\n\n".toByteArray()),
+        )
+        assertEquals(listOf("Grid", ""), client().getPagedata(ref), "the second page has none")
+    }
+
+    @Test
+    fun `getPagedata is empty for a document without the file`() = runTest {
+        val ref = cloud.seed(documentMetadata("a pdf"), documentContent())
+        assertEquals(emptyList(), client().getPagedata(ref))
+    }
+
+    @Test
+    fun `setPagedata round-trips and creates the file when absent`() = runTest {
+        val ref = cloud.seed(documentMetadata("a pdf"), documentContent())
+        val api = client()
+        val updated = api.setPagedata(ref, listOf("Grid", "", "Dots"))
+        assertEquals(listOf("Grid", "", "Dots"), api.getPagedata(updated))
+        assertEquals("Grid\n\nDots\n", cloud.lastUpload(".pagedata"), "one line each, newline terminated")
+    }
+
+    @Test
     fun `getPageMetadata reads layer names and ignores the page file beside it`() = runTest {
         val id = java.util.UUID.randomUUID().toString()
         val ref = cloud.seed(
