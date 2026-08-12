@@ -538,21 +538,28 @@ public class RemarkableClient internal constructor(
     public suspend fun uploadFolder(visibleName: String): ItemRef =
         rawClient.uploadFile(visibleName, ByteArray(0), UploadKind.Folder)
 
+    /** @throws ValidationException if the item at [ref] is not a document */
+    public suspend fun getDocumentContent(ref: ItemRef): DocumentContent =
+        getContent(ref).orFail(ref.hash)
+
+    /** @throws ValidationException if the item at [ref] is not a folder */
+    public suspend fun getCollectionContent(ref: ItemRef): CollectionContent =
+        getContent(ref).orFail(ref.hash)
+
     /**
-     * rewrites a document's `.content`, leaving its `.metadata` alone
+     * writes a document's `.content`
+     *
+     * Keys the wire carries but this api does not model are preserved from what is already
+     * stored, so writing back a value that never saw them cannot drop them.
      *
      * @throws ValidationException if the item at [ref] is not a document
      */
-    public suspend fun updateDocumentContent(
-        ref: ItemRef,
-        update: (DocumentContent) -> DocumentContent,
-    ): ItemRef = editContent(ref, EntryType.Document) { update(it.orFail(ref.hash)) }
+    public suspend fun setDocumentContent(ref: ItemRef, content: DocumentContent): ItemRef =
+        editContent(ref, EntryType.Document) { content }
 
-    /** rewrites a folder's `.content`; see [updateDocumentContent] */
-    public suspend fun updateCollectionContent(
-        ref: ItemRef,
-        update: (CollectionContent) -> CollectionContent,
-    ): ItemRef = editContent(ref, EntryType.Collection) { update(it.orFail(ref.hash)) }
+    /** see [setDocumentContent]; @throws ValidationException if [ref] is not a folder */
+    public suspend fun setCollectionContent(ref: ItemRef, content: CollectionContent): ItemRef =
+        editContent(ref, EntryType.Collection) { content }
 
     private suspend fun editContent(
         ref: ItemRef,
@@ -656,7 +663,7 @@ public class RemarkableClient internal constructor(
      *
      * @throws ValidationException if [pages] names a page the document does not have. Adding
      * a page means listing it in [DocumentContent.pages], so that belongs to
-     * [updateDocumentContent].
+     * [setDocumentContent].
      */
     public suspend fun setPages(
         ref: ItemRef,

@@ -99,7 +99,7 @@ val updated = api.setPages(ref, edited)
 Only the pages that actually changed are uploaded: an unedited page serialises back to the
 bytes it was read from, so it re-stages to the hash reading it already cached. Pages the
 document doesn't already have are refused rather than written — adding one means listing it in
-the `.content` too, which is `updateDocumentContent`.
+the `.content` too, which is `setDocumentContent`.
 
 A single page has its own pair, and `getPage` is the one that matters: it fetches one blob
 rather than the whole document, and fails only if *that* page is malformed.
@@ -131,8 +131,8 @@ api.trash(moved)                                // there is no hard delete
 ```
 
 `move`, `rename` and `star` are the named cases of `setMetadata`, which reaches the rest of
-`Metadata` — `lastOpenedPage`, `deleted`, `source`. Writes take a value, so a change is a
-read, a `copy`, and a write:
+`Metadata` — `lastOpenedPage`, `deleted`, `source`. Every write takes a value, so a change is
+a read, a `copy`, and a write:
 
 ```kotlin
 api.setMetadata(ref, api.getMetadata(ref).copy(lastOpenedPage = 12))
@@ -147,11 +147,15 @@ result.moved            // Map<ItemRef, ItemRef>, old to new
 result.notFound         // refs that were no longer in the root index
 ```
 
-Content edits take a lambda over the fetched value, so the read-modify-write is explicit:
+Content works the same way, with a typed getter for each shape so nothing needs casting:
 
 ```kotlin
-api.updateDocumentContent(ref) { it.copy(textScale = 1.5, lineHeight = 200) }
+val content = api.getDocumentContent(ref)
+api.setDocumentContent(ref, content.copy(textScale = 1.5, lineHeight = 200))
 ```
+
+Keys the wire carries but this library doesn't model are preserved from what's already
+stored, so writing back a value that never saw them can't drop them.
 
 ### Two ways to add a document
 

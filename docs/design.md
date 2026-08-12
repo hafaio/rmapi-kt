@@ -410,6 +410,15 @@ tells a caller that deleting is a move — and therefore reversible — rather t
 to discover that `Parent.Trash` is where deletion lives. `dumpCache`/`clearCache` exist once,
 on `RemarkableClient`, because the cache is configured once, on `SessionOptions`.
 
+**Every write takes a value.** `setMetadata`, `setDocumentContent`, `setPages` and their
+singular forms are all `set(ref, value)`; none takes a lambda over the stored value. A
+`(T) -> T` parameter reads as a partial update and saves the caller one fetch, but it puts
+their code inside this library's control flow to buy nothing they cannot do themselves, and
+it does not generalise: a page write never needs the old value, so half the api would take a
+lambda and half would not. A read, a `copy`, and a write is three ordinary steps a caller can
+see, interrupt, or skip. Preserving unmodelled `.content` keys does not need the lambda
+either — those come from the stored text, which the library reads regardless.
+
 The same exemption covers `rename` and `star` beside `setMetadata`: each names a wire
 field a caller would otherwise have to know is called something else — `visibleName`, and
 `pinned` for a flag the device draws as a star. `move` earns its place by taking a `Parent`
@@ -672,7 +681,7 @@ history this library frames but does not interpret.
 `pages` list does not mention is a file the device will never render, so accepting an unknown
 page id would produce a write that appears to succeed and shows nothing — a
 `ValidationException` naming the id is the honest answer, and adding a page is
-`updateDocumentContent`'s business because that is the file which has to change.
+`setDocumentContent`'s business because that is the file which has to change.
 
 **A page exists in the `.content`, not on disk.** The device writes a page's `.rm` only when
 something is drawn on it, so a declared page with no `.rm` is a real, empty page rather than a

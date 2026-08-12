@@ -364,10 +364,10 @@ class ClientTest {
     }
 
     @Test
-    fun `updateDocumentContent applies the caller's edit and leaves metadata alone`() = runTest {
+    fun `setDocumentContent applies the caller's edit and leaves metadata alone`() = runTest {
         val api = client()
         val document = api.putPdf("doc", byteArrayOf(1))
-        api.updateDocumentContent(document) { it.copy(textScale = 2.0, lineHeight = 200) }
+        api.setDocumentContent(document, api.getDocumentContent(document).copy(textScale = 2.0, lineHeight = 200))
 
         val content = assertIs<DocumentContent>(cloud.uploadedContent())
         assertEquals(2.0, content.textScale)
@@ -380,18 +380,20 @@ class ClientTest {
         val api = client()
         val folder = api.putFolder("a folder")
         val error = assertFailsWith<ValidationException> {
-            api.updateDocumentContent(folder) { it }
+            api.getDocumentContent(folder)
         }
         assertTrue("Collection" in error.message.orEmpty(), error.message.orEmpty())
     }
 
     @Test
-    fun `updateCollectionContent edits a folder's tags`() = runTest {
+    fun `setCollectionContent edits a folder's tags`() = runTest {
         val api = client()
         val folder = api.putFolder("a folder")
-        api.updateCollectionContent(folder) {
-            it.copy(tags = Tags.Structured(listOf(Tag("archive", 1700000000000))))
-        }
+        val content = api.getCollectionContent(folder)
+        api.setCollectionContent(
+            folder,
+            content.copy(tags = Tags.Structured(listOf(Tag("archive", 1700000000000)))),
+        )
         assertEquals(listOf("archive"), assertIs<CollectionContent>(cloud.uploadedContent()).tags.names)
     }
 
@@ -400,7 +402,7 @@ class ClientTest {
         // metadata says document, but the content has no fileType so it reads as a folder's
         val ref = cloud.seed(documentMetadata("odd"), CollectionContent())
         val error = assertFailsWith<ValidationException> {
-            client().updateDocumentContent(ref) { it }
+            client().getDocumentContent(ref)
         }
         assertTrue("Collection" in error.message.orEmpty(), error.message.orEmpty())
     }
