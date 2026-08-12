@@ -3,10 +3,7 @@ package io.hafa.rmapikt
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/**
- * the fixed part of every `.rm` header, followed by one version digit and padding to
- * [RM_HEADER_LENGTH]
- */
+/** the fixed part of every `.rm` header, before the version digit and padding */
 internal const val RM_HEADER_PREFIX = "reMarkable .lines file, version="
 internal const val RM_HEADER_LENGTH = 43
 private const val FLOATS_PER_POINT = 6
