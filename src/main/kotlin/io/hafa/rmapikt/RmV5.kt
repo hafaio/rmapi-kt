@@ -165,18 +165,9 @@ public data class RmStroke(
     public val width: Float,
     /** the sampled points, in the order they were drawn */
     public val points: List<RmPoint>,
-    /**
-     * a word the format reserves and no public description explains
-     *
-     * Kept rather than dropped so a page read from the device can be written back
-     * unchanged. Zero for a stroke this library builds.
-     */
+    /** a word the format reserves and no public description explains */
     public val reserved: Int = 0,
-    /**
-     * a further word version 5 added, whose meaning is likewise not publicly known
-     *
-     * Never written for a version 3 page, which has no such field.
-     */
+    /** a further such word, which a version 3 page does not have */
     public val reservedV5: Int = 0,
 ) {
     /** the tool, when it is one this library knows */

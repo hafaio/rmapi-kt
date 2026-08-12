@@ -291,9 +291,8 @@ public class RemarkableClient internal constructor(
     /**
      * Rejects an item that is not the kind the caller asked for.
      *
-     * `.metadata` states the kind outright, where a `.content` is told apart by which keys it
-     * has — a template's is empty and reads as a folder's. Both halves of every typed pair go
-     * through this so a read never accepts what its write would refuse.
+     * From `.metadata`, which states the kind, rather than from the `.content`, which is told
+     * apart by which keys it has — a template's is empty and reads as a folder's.
      */
     private suspend fun requireKind(ref: ItemRef, expected: EntryType) {
         val actual = getMetadata(ref).type
@@ -332,10 +331,8 @@ public class RemarkableClient internal constructor(
     /**
      * restores an archive produced by [exportArchive]
      *
-     * Always lands under a fresh id, so a restore is a new item rather than the old one
-     * returning: anything that referenced the original — a folder's children, say — still
-     * points at the original. [ImportOptions] places and names it, and the ref that comes
-     * back takes [move] and [rename] like any other.
+     * Always lands under a fresh id, so a folder's children still point at the original
+     * folder rather than the restored one.
      *
      * Takes an archive, not a pdf — for that use [putPdf] or [uploadPdf].
      */
