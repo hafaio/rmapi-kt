@@ -445,7 +445,8 @@ the rule forbids is a second name for the *same* thing, not a shorter name for a
 What does a caller of this library actually branch on? (1) *"my view of the root was
 stale — refetch and redo"*; (2) *"the server refused or broke — can I retry?"*;
 (3) *"the payload didn't match the reverse-engineered schema — give me the raw text"*;
-(4) *"the thing I referenced isn't there"*. The taxonomy models exactly those, sealed
+(4) *"the thing I referenced isn't there"* — and, since that has two very different
+recoveries, whether it is gone or whether only this ref went stale. The taxonomy models exactly those, sealed
 so `when` is exhaustive:
 
 ```kotlin
