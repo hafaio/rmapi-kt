@@ -20,6 +20,7 @@ internal const val SCHEMA_SUFFIX = ".docSchema"
 internal const val CONTENT_SUFFIX = ".content"
 internal const val METADATA_SUFFIX = ".metadata"
 internal const val RM_SUFFIX = ".rm"
+internal const val TEMPLATE_SUFFIX = ".template"
 
 /**
  * Decodes responses leniently, where [wireJson] decodes stored files strictly.
@@ -194,6 +195,14 @@ public class RawRemarkableClient internal constructor(
     public suspend fun getMetadata(fileName: String, hash: FileHash): Metadata =
         decodeWire(Metadata.serializer(), getText(fileName, hash), "metadata")
 
+    /** parses [hash] as a `.rm` page file; the counterpart of [stageRm] */
+    public suspend fun getRm(fileName: String, hash: FileHash): RmFile =
+        parseRmFile(getBlob(fileName, hash))
+
+    /** parses [hash] as a `.template` file; the counterpart of [stageTemplate] */
+    public suspend fun getTemplate(fileName: String, hash: FileHash): TemplateDefinition =
+        decodeWire(TemplateDefinition.serializer(), getText(fileName, hash), "template")
+
     /** hashes [bytes] locally, ready for [upload] */
     public fun stageFile(id: String, bytes: ByteArray): StagedFile = StagedFile(
         entry = RawEntry(
@@ -232,6 +241,10 @@ public class RawRemarkableClient internal constructor(
         require(id.endsWith(RM_SUFFIX)) { "id '$id' did not end with '$RM_SUFFIX'" }
         return stageFile(id, serializeRmFile(page))
     }
+
+    /** hashes a template definition locally, ready for [upload] */
+    public fun stageTemplate(id: String, definition: TemplateDefinition): StagedFile =
+        stageText(id, encodeWire(TemplateDefinition.serializer(), definition))
 
     /** @throws IllegalArgumentException if [id] does not end in `.metadata` */
     public fun stageMetadata(id: String, metadata: Metadata): StagedFile {

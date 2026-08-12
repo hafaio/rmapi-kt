@@ -411,6 +411,11 @@ other page is malformed. Fetching a single blob is different work, not a shorter
 exists for a real reason, a missing `setPage` becomes its own puzzle, and a caller who
 found one will look for the other. Pair symmetry is worth one delegating line.
 
+`raw.getRm` and `raw.stageRm` are each one line over `parseRmFile`/`serializeRmFile` and a
+blob call, and both are kept: the raw tier pairs a `get*` with a `stage*` for every file kind
+it names, and a half-pair is a worse signal than a short method — it reads as though writing
+a page were supported and reading one were not.
+
 `trash`/`bulkTrash` are one line over `move`/`bulkMove` too, and are kept anyway: the trash
 is not a folder. It is the only delete this protocol has, and naming it as a verb is what
 tells a caller that deleting is a move — and therefore reversible — rather than leaving them
