@@ -941,6 +941,47 @@ class ClientTest {
     }
 
     @Test
+    fun `bulkMove with nothing to move leaves the root and its generation alone`() = runTest {
+        val api = client()
+        api.putPdf("untouched", byteArrayOf(1))
+        val before = cloud.rootEntries().map { it.hash.hex }
+        val rootWrites = { cloud.received.count { it.path.endsWith("/root") && it.method == "PUT" } }
+        val writesBefore = rootWrites()
+        val absent = ItemRef(ItemId("22222222-2222-4222-8222-222222222222"), FileHash("a".repeat(64)))
+
+        val result = api.bulkMove(listOf(absent), Parent.Trash)
+        assertEquals(emptyMap(), result.moved)
+        assertEquals(setOf(absent), result.notFound)
+        assertEquals(before, cloud.rootEntries().map { it.hash.hex }, "the root is unchanged")
+        assertEquals(writesBefore, rootWrites(), "and no generation was burned")
+    }
+
+    @Test
+    fun `a document the device never opened still has readable, writable pages`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        // pages is null until the device opens the document, but the .rm files are there
+        val ref = cloud.seed(
+            documentMetadata("never opened"),
+            documentContent(FileType.Notebook),
+            id = id,
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        val api = client()
+        assertEquals(setOf("page-a"), api.getPages(ref).keys)
+        assertEquals(rmPage(1f), api.getPage(ref, "page-a"), "the single read agrees with the map")
+        val updated = api.setPage(ref, "page-a", rmPage(7f))
+        assertEquals(rmPage(7f), api.getPage(updated, "page-a"))
+    }
+
+    @Test
+    fun `setPagedata refuses a folder`() = runTest {
+        val api = client()
+        val folder = api.putFolder("a folder")
+        val error = assertFailsWith<ValidationException> { api.setPagedata(folder, listOf("Grid")) }
+        assertTrue("Collection" in error.message.orEmpty(), error.message.orEmpty())
+    }
+
+    @Test
     fun `a read refuses the item kinds its write would refuse`() = runTest {
         val id = java.util.UUID.randomUUID().toString()
         val template = cloud.seed(
