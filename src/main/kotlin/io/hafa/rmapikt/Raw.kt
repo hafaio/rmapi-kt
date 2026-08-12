@@ -20,6 +20,7 @@ internal const val SCHEMA_SUFFIX = ".docSchema"
 internal const val CONTENT_SUFFIX = ".content"
 internal const val METADATA_SUFFIX = ".metadata"
 internal const val RM_SUFFIX = ".rm"
+internal const val HIGHLIGHTS_SUFFIX = ".highlights"
 internal const val TEMPLATE_SUFFIX = ".template"
 
 /**
@@ -203,6 +204,10 @@ public class RawRemarkableClient internal constructor(
     public suspend fun getTemplate(fileName: String, hash: FileHash): TemplateDefinition =
         decodeWire(TemplateDefinition.serializer(), getText(fileName, hash), "template")
 
+    /** parses [hash] as a page's highlights file; the counterpart of [stageHighlights] */
+    public suspend fun getHighlights(fileName: String, hash: FileHash): List<List<Highlight>> =
+        decodeWire(HighlightsFile.serializer(), getText(fileName, hash), "highlights").highlights
+
     /** hashes [bytes] locally, ready for [upload] */
     public fun stageFile(id: String, bytes: ByteArray): StagedFile = StagedFile(
         entry = RawEntry(
@@ -245,6 +250,10 @@ public class RawRemarkableClient internal constructor(
     /** hashes a template definition locally, ready for [upload] */
     public fun stageTemplate(id: String, definition: TemplateDefinition): StagedFile =
         stageText(id, encodeWire(TemplateDefinition.serializer(), definition))
+
+    /** hashes a page's highlights locally, ready for [upload] */
+    public fun stageHighlights(id: String, highlights: List<List<Highlight>>): StagedFile =
+        stageText(id, encodeWire(HighlightsFile.serializer(), HighlightsFile(highlights)))
 
     /** @throws IllegalArgumentException if [id] does not end in `.metadata` */
     public fun stageMetadata(id: String, metadata: Metadata): StagedFile {

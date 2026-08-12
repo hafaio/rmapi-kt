@@ -130,6 +130,16 @@ val moved = api.move(starred, Parent.Folder(folder.id))
 api.trash(moved)                                // there is no hard delete
 ```
 
+Highlights on a pdf or epub are stored per page, and come back as a list of lists — one
+fragment per line a passage spans:
+
+```kotlin
+for ((pageId, passages) in api.getHighlights(ref)) {
+    for (fragment in passages.flatten()) println("$pageId ${fragment.text}")
+}
+api.setHighlights(ref, pageId, passages)
+```
+
 A template's definition is read and written the same way, and is the whole of what the
 device renders it from — a template's `.content` is empty:
 

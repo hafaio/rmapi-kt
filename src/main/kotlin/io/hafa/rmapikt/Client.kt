@@ -277,19 +277,7 @@ public class RemarkableClient internal constructor(
      *
      * @throws ValidationException if any page is malformed
      */
-    public suspend fun getPages(ref: ItemRef): Map<String, RmFile> = coroutineScope {
-        val prefix = "${ref.id.value}/"
-        componentEntries(ref)
-            .filter { it.id.startsWith(prefix) && it.id.endsWith(RM_SUFFIX) }
-            .map { entry ->
-                async {
-                    entry.id.removePrefix(prefix).removeSuffix(RM_SUFFIX) to
-                        parseRmFile(rawClient.getBlob(entry.id, entry.hash))
-                }
-            }
-            .awaitAll()
-            .toMap()
-    }
+    public suspend fun getPages(ref: ItemRef): Map<String, RmFile> = pagedFiles(ref, PagedFile.Rm)
 
     /**
      * one page, or null if nothing has been drawn on it yet
@@ -302,15 +290,8 @@ public class RemarkableClient internal constructor(
      *
      * @throws ValidationException if the document has no page [pageId]
      */
-    public suspend fun getPage(ref: ItemRef, pageId: String): RmFile? {
-        val declared = declaredPages(ref)
-        if (pageId !in declared) {
-            noSuchPages(ref.id.value, listOf(pageId))
-        }
-        val fileName = "${ref.id.value}/$pageId$RM_SUFFIX"
-        val entry = componentEntries(ref).firstOrNull { it.id == fileName } ?: return null
-        return parseRmFile(rawClient.getBlob(entry.id, entry.hash))
-    }
+    public suspend fun getPage(ref: ItemRef, pageId: String): RmFile? =
+        pagedFile(ref, pageId, PagedFile.Rm)
 
     /** the page ids the item's `.content` declares; empty for anything but a document */
     private suspend fun declaredPages(ref: ItemRef): Set<String> =
@@ -698,47 +679,108 @@ public class RemarkableClient internal constructor(
      * a page means listing it in [DocumentContent.pages], so that belongs to
      * [setDocumentContent].
      */
-    public suspend fun setPages(
-        ref: ItemRef,
-        pages: Map<String, RmFile>,
-    ): ItemRef = if (pages.isEmpty()) {
-        ref
-    } else {
-        editItem(ref) { item, schemaVersion -> stagePageEdits(item, schemaVersion, pages) }
-    }
+    public suspend fun setPages(ref: ItemRef, pages: Map<String, RmFile>): ItemRef =
+        setPagedFiles(ref, pages, PagedFile.Rm)
 
     /** the single-page case of [setPages] */
     public suspend fun setPage(ref: ItemRef, pageId: String, page: RmFile): ItemRef =
         setPages(ref, mapOf(pageId to page))
 
-    private suspend fun stagePageEdits(
-        item: RawEntry,
-        schemaVersion: SchemaVersion,
-        pages: Map<String, RmFile>,
-    ): Pair<StagedFile, List<StagedFile>> {
-        val itemRef = ItemRef(ItemId(item.id), item.hash)
-        val prefix = "${item.id}/"
-        val components = componentEntries(itemRef).toMutableList()
-        val unknown = pages.keys - declaredPages(itemRef)
-        if (unknown.isNotEmpty()) {
-            noSuchPages(item.id, unknown)
+    /**
+     * every page's highlights, keyed by page id
+     *
+     * Only pages that carry highlights appear. A page's highlights are a list of lists
+     * because reMarkable splits one highlighted passage into a fragment per line it spans.
+     */
+    public suspend fun getHighlights(ref: ItemRef): Map<String, List<List<Highlight>>> =
+        pagedFiles(ref, PagedFile.Highlights)
+
+    /** one page's highlights, or null if it has none; see [getHighlights] */
+    public suspend fun getHighlights(ref: ItemRef, pageId: String): List<List<Highlight>>? =
+        pagedFile(ref, pageId, PagedFile.Highlights)
+
+    /**
+     * writes the highlights of the pages named, leaving the rest alone
+     *
+     * A page with no highlights file yet gets one. Nothing checks the text against the
+     * document: [Highlight.start] and [Highlight.length] index into the page's own text, and
+     * this library does not extract that.
+     */
+    public suspend fun setHighlights(
+        ref: ItemRef,
+        highlights: Map<String, List<List<Highlight>>>,
+    ): ItemRef = setPagedFiles(ref, highlights, PagedFile.Highlights)
+
+    /** the single-page case of [setHighlights] */
+    public suspend fun setHighlights(
+        ref: ItemRef,
+        pageId: String,
+        highlights: List<List<Highlight>>,
+    ): ItemRef = setHighlights(ref, mapOf(pageId to highlights))
+
+    /**
+     * Describes a file a document keeps once per page.
+     *
+     * A page exists because [DocumentContent.pages] lists it. Whether it has any given one
+     * of these files is separate: the device writes each only when there is something to
+     * write, so an absent file means an empty page rather than a missing one.
+     */
+    /** every page that has this file, keyed by page id */
+    private suspend fun <T> pagedFiles(ref: ItemRef, kind: PagedFile<T>): Map<String, T> =
+        coroutineScope {
+            componentEntries(ref)
+                .mapNotNull { entry -> kind.pageIdOf(ref.id.value, entry.id)?.to(entry) }
+                .map { (pageId, entry) ->
+                    async { pageId to kind.read(rawClient, entry.id, entry.hash) }
+                }
+                .awaitAll()
+                .toMap()
         }
 
-        // a declared page has no `.rm` until something is drawn on it, so a first write adds
-        // an entry where a later one replaces it
-        val existing = components.withIndex()
-            .filter { (_, entry) -> entry.id.startsWith(prefix) && entry.id.endsWith(RM_SUFFIX) }
-            .associate { (index, entry) ->
-                entry.id.removePrefix(prefix).removeSuffix(RM_SUFFIX) to index
-            }
-        val staged = pages.map { (pageId, page) ->
-            rawClient.stageRm("$prefix$pageId$RM_SUFFIX", page).also { file ->
-                val index = existing[pageId]
-                if (index == null) components.add(file.entry) else components[index] = file.entry
-            }
+    /** one page's file, or null when the page carries none */
+    private suspend fun <T> pagedFile(ref: ItemRef, pageId: String, kind: PagedFile<T>): T? {
+        if (pageId !in declaredPages(ref)) {
+            noSuchPages(ref.id.value, listOf(pageId))
         }
-        val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
-        return itemIndex to (staged + itemIndex)
+        val fileName = kind.fileName(ref.id.value, pageId)
+        val entry = componentEntries(ref).firstOrNull { it.id == fileName } ?: return null
+        return kind.read(rawClient, entry.id, entry.hash)
+    }
+
+    private suspend fun <T> setPagedFiles(
+        ref: ItemRef,
+        values: Map<String, T>,
+        kind: PagedFile<T>,
+    ): ItemRef = if (values.isEmpty()) {
+        ref
+    } else {
+        editItem(ref) { item, schemaVersion ->
+            val itemRef = ItemRef(ItemId(item.id), item.hash)
+            val unknown = values.keys - declaredPages(itemRef)
+            if (unknown.isNotEmpty()) {
+                noSuchPages(item.id, unknown)
+            }
+
+            // the device writes one of these only when there is something to write, so a
+            // first write adds an entry where a later one replaces it
+            val components = componentEntries(itemRef).toMutableList()
+            val existing = components.withIndex()
+                .mapNotNull { (index, entry) -> kind.pageIdOf(item.id, entry.id)?.to(index) }
+                .toMap()
+            val staged = values.map { (pageId, value) ->
+                kind.stage(rawClient, kind.fileName(item.id, pageId), value)
+                    .also { file ->
+                        val index = existing[pageId]
+                        if (index == null) {
+                            components.add(file.entry)
+                        } else {
+                            components[index] = file.entry
+                        }
+                    }
+            }
+            val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
+            itemIndex to (staged + itemIndex)
+        }
     }
 
     /** moves an item */
@@ -843,6 +885,59 @@ private inline fun <reified T : Content> Content.orFail(hash: FileHash): T = thi
         "the content at '${hash.hex}' is ${this::class.simpleName}, " +
             "not the ${T::class.simpleName} its metadata implies",
     )
+
+/**
+ * a file a document keeps once per page, named `<prefix><pageId><suffix>`
+ *
+ * Deriving both the name and the page id from one prefix and suffix is the point: two
+ * independent functions would let the writer and the reader drift apart, and the `.rm` and
+ * the layer metadata of a page differ only by suffix.
+ *
+ * A page exists because [DocumentContent.pages] lists it. Whether it has any given one of
+ * these is separate: the device writes each only when there is something to write, so an
+ * absent file means an empty page rather than a missing one.
+ */
+internal sealed class PagedFile<T>(private val suffix: String) {
+    protected abstract fun prefix(docId: String): String
+
+    // the raw tier owns every codec; these only say which of its accessors to use
+    abstract suspend fun read(raw: RawRemarkableClient, fileName: String, hash: FileHash): T
+
+    abstract fun stage(raw: RawRemarkableClient, id: String, value: T): StagedFile
+
+    fun fileName(docId: String, pageId: String): String = "${prefix(docId)}$pageId$suffix"
+
+    fun pageIdOf(docId: String, fileId: String): String? {
+        val prefix = prefix(docId)
+        return if (fileId.startsWith(prefix) && fileId.endsWith(suffix)) {
+            fileId.removePrefix(prefix).removeSuffix(suffix)
+        } else {
+            null
+        }
+    }
+
+    /** the pen strokes, `<docId>/<pageId>.rm` */
+    object Rm : PagedFile<RmFile>(RM_SUFFIX) {
+        override fun prefix(docId: String): String = "$docId/"
+
+        override suspend fun read(raw: RawRemarkableClient, fileName: String, hash: FileHash) =
+            raw.getRm(fileName, hash)
+
+        override fun stage(raw: RawRemarkableClient, id: String, value: RmFile) =
+            raw.stageRm(id, value)
+    }
+
+    /** text highlights, `<docId>.highlights/<pageId>.json` */
+    object Highlights : PagedFile<List<List<Highlight>>>(".json") {
+        override fun prefix(docId: String): String = "$docId$HIGHLIGHTS_SUFFIX/"
+
+        override suspend fun read(raw: RawRemarkableClient, fileName: String, hash: FileHash) =
+            raw.getHighlights(fileName, hash)
+
+        override fun stage(raw: RawRemarkableClient, id: String, value: List<List<Highlight>>) =
+            raw.stageHighlights(id, value)
+    }
+}
 
 /** the wire's flat mode value for a [Zoom] */
 private val Zoom.mode: ZoomMode
