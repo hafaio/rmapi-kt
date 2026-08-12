@@ -20,7 +20,7 @@ choices behind them.
   create/upload, update, move/rename/star/trash, bulk operations, cache management); a
   low-level raw client (root hash and generation, blob get/put, entry indexes, schema 3+4
   reads with schema-4 root writes, the ingestion upload endpoint); and `.rm` stroke
-  parsing (§D13).
+  parsing and writing (§D13).
 - **Design posture**: make the protocol's hazards unrepresentable. A `suspend` API with
   structured concurrency; sealed `Entry` and `Content` hierarchies with a sealed `Tags`
   type for the two shapes the wire stores tags in; value classes for hashes and ids, and
@@ -374,12 +374,35 @@ field needs a name the type doesn't already give it. `FileHash` already says wha
 
 **A method must add something a caller cannot.** The test is whether removing it would push
 the caller down to `raw`. `uploadPdf` passes — without it there is no way to name the right
-upload kind except through the low-level api. `listMetadata()` and `getPages()` failed it:
-each was one line over calls that remain — `listRefs().associateWith(::getMetadata)` and
-`getRawPages(ref).mapValues(::parseRmFile)` — so each was a second name for something the api
-already said, and both were removed. Both were also quietly all-or-nothing, throwing for the
-whole account or the whole document if a single item or page failed to parse, which the
-composed form leaves the caller free to handle per item.
+upload kind except through the low-level api. `listMetadata()` failed it: it was one line over
+calls that remain, `listRefs().associateWith(::getMetadata)`, so it was a second name for
+something the api already said. It was also quietly all-or-nothing, throwing for the whole
+account if a single item failed to parse, which the composed form leaves the caller free to
+handle per item.
+
+**Each tier has one currency, and bytes are not the high tier's.** `getPages` was removed
+under the rule above and then restored, because the rule was being read against the wrong
+sibling. It looked like one line over `getRawPages(ref).mapValues(::parseRmFile)` — but
+`getRawPages` was itself the mistake: a method on the *typed* client handing back undecoded
+bytes. `RemarkableClient` returns `Metadata`, `Content`, `TemplateDefinition`; a `.rm` file
+has a decoded form too, so returning bytes made pages the one component a caller had to
+finish decoding themselves. Removing `getRawPages` leaves `getPages` one line over nothing:
+it is the only page accessor on the tier, and it knows the `<id>/<pageid>.rm` layout, which
+is exactly what the tier is for. `getPdf` and `getEpub` still return bytes and are not
+exceptions — a pdf has no decoded form in this library, so bytes *are* its type.
+
+The all-or-nothing objection then answers itself. `getPages` does throw for the whole document
+when one page is unreadable, and that is what makes `setPages` safe: a document that cannot
+be read in full is never one this api will offer to write back. The escape hatch is the tier
+whose currency bytes actually are — walk the entries with `raw` and `getBlob` the pages that
+do parse.
+
+`getPage` is the exception that proves the rule: it is *not* one line over `getPages`, because
+`getPages(ref).getValue(id)` downloads and parses every page to return one, and throws if any
+other page is malformed. Fetching a single blob is different work, not a shorter spelling.
+`setPage` genuinely is one line over `setPages`, and is kept anyway — once `getPage`
+exists for a real reason, a missing `setPage` becomes its own puzzle, and a caller who
+found one will look for the other. Pair symmetry is worth one delegating line.
 
 `trash`/`bulkTrash` are one line over `move`/`bulkMove` too, and are kept anyway: the trash
 is not a folder. It is the only delete this protocol has, and naming it as a verb is what
@@ -631,15 +654,33 @@ Seventy-one pages decoded to no layers. Fifty-two carry no stroke blocks at all;
 nineteen carry only tombstones — 47 of them, every one a deleted stroke, independently
 confirmed. Both are correct outcomes rather than silent loss.
 
-**Writing.** `serializeRmFile` inverts the parser, and `raw.stageRm` hashes the result for
-upload. Round-tripping an untouched page reproduces the original bytes exactly, which for a
-content-addressed store means the original hash and therefore no upload at all — so writing
-a page back is only ever a change when it really is one. Achieving that meant keeping two
+**Writing.** `serializeRmFile` inverts the parser, `raw.stageRm` hashes the result, and
+`setPages` commits a whole map of them through the sync protocol. Round-tripping an
+untouched page reproduces the original bytes exactly, which for a content-addressed store
+means the original hash and therefore no upload at all — so writing a page back is only ever
+a change when it really is one, and handing `setPages` a map straight from `getPages`
+costs exactly the pages that were edited. That property is what lets the typed api take
+`RmFile` rather than bytes without rewriting pages the caller never touched. Achieving it
+meant keeping two
 words per version 3/5 stroke that the reader previously discarded (`reserved`, and the extra
 word version 5 added); zeroing them would have quietly rewritten every page that carries
 them. A version 6 page is written from its blocks rather than its decoded layers, because
 those layers are a view of the blocks and re-encoding them would drop the text, glyphs, and
 history this library frames but does not interpret.
+
+`setPages` replaces pages and refuses to invent them. A `.rm` file the `.content`'s
+`pages` list does not mention is a file the device will never render, so accepting an unknown
+page id would produce a write that appears to succeed and shows nothing — a
+`ValidationException` naming the id is the honest answer, and adding a page is
+`updateDocumentContent`'s business because that is the file which has to change.
+
+**A page exists in the `.content`, not on disk.** The device writes a page's `.rm` only when
+something is drawn on it, so a declared page with no `.rm` is a real, empty page rather than a
+missing one. Both halves of the api follow the `.content`: `getPage` returns null for such a
+page and raises only for an id the document never declared, and a write to one creates the
+file, which is how a blank page gets its first strokes. Keying off the `.rm` file instead
+would have made an untouched page indistinguishable from a nonexistent one — an error on read
+and a refusal on write, both wrong.
 
 *Still unmodelled*: text, glyphs, and the editing history — block types `0x00`, `0x01`,
 `0x03`, `0x04`, `0x07`, `0x08`, `0x09`, `0x0A`, and `0x0D` are framed and kept but not
