@@ -216,7 +216,7 @@ this is a transfer format, not the document itself — for the pdf use `getPdf`:
 
 ```kotlin
 val archive = api.exportArchive(ref)      // a zip of every component file
-val restored = api.importArchive(archive)       // under a fresh id by default
+val restored = api.importArchive(archive)       // always under a fresh id
 ```
 
 ## Configuration
