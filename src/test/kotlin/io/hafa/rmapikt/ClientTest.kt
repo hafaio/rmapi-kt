@@ -788,6 +788,43 @@ class ClientTest {
     }
 
     @Test
+    fun `getPageMetadata reads layer names and ignores the page file beside it`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a", "page-b")),
+            id = id,
+            extraFiles = mapOf(
+                "page-a.rm" to serializeRmFile(rmPage(1f)),
+                "page-a-metadata.json" to """{"layers":[{"name":"Layer 1"},{"name":"ink"}]}""".toByteArray(),
+            ),
+        )
+        val api = client()
+        val all = api.getPageMetadata(ref)
+        assertEquals(setOf("page-a"), all.keys, "the .rm beside it is not metadata")
+        assertEquals(listOf("Layer 1", "ink"), all.getValue("page-a").layers.map { it.name })
+        assertNull(api.getPageMetadata(ref, "page-b"), "a declared page with none reads as null")
+        assertFailsWith<ValidationException> { api.getPageMetadata(ref, "page-z") }
+    }
+
+    @Test
+    fun `setPageMetadata adds a file for a page that had none`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val ref = cloud.seed(
+            documentMetadata("a notebook"),
+            documentContent(FileType.Notebook).copy(pages = listOf("page-a")),
+            id = id,
+            extraFiles = mapOf("page-a.rm" to serializeRmFile(rmPage(1f))),
+        )
+        val api = client()
+        val metadata = PageMetadata(listOf(PageLayer("sketch")))
+        val updated = api.setPageMetadata(ref, "page-a", metadata)
+
+        assertEquals(metadata, api.getPageMetadata(updated, "page-a"))
+        assertEquals(rmPage(1f), api.getPage(updated, "page-a"), "the page itself is untouched")
+    }
+
+    @Test
     fun `getHighlights returns every page that carries them, keyed by page id`() = runTest {
         val id = java.util.UUID.randomUUID().toString()
         val page = """
