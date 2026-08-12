@@ -51,9 +51,22 @@ public class ValidationException(
 
 /** the hash passed in isn't an entry of the current root index */
 public class HashNotFoundException(
-    /** the hash that wasn't found */
-    public val hash: FileHash,
-) : RemarkableException("'${hash.hex}' not found in the root index")
+    /** the ref that was looked for */
+    public val ref: ItemRef,
+    /**
+     * where the item is now, when it is still in the account under a newer hash
+     *
+     * Null means the item is gone; a hash means only this ref went stale, and re-reading is
+     * enough to carry on.
+     */
+    public val currentHash: FileHash? = null,
+) : RemarkableException(
+    if (currentHash == null) {
+        "'${ref.id.value}' is not in the root index"
+    } else {
+        "'${ref.id.value}' has moved on from '${ref.hash.hex}' to '${currentHash.hex}'"
+    },
+)
 
 /** the item exists but has no such component, e.g. asking a pdf document for its epub */
 public class ComponentNotFoundException(

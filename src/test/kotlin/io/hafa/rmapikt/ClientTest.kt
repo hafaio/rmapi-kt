@@ -354,7 +354,19 @@ class ClientTest {
                 "nope",
             )
         }
-        assertEquals("f".repeat(64), error.hash.hex)
+        assertEquals("f".repeat(64), error.ref.hash.hex)
+        assertNull(error.currentHash, "the item is gone, not merely moved on")
+    }
+
+    @Test
+    fun `a ref left behind by another client says where the item went`() = runTest {
+        val api = client()
+        val stale = api.putPdf("doc", byteArrayOf(1))
+        val moved = api.rename(stale, "renamed")
+
+        val error = assertFailsWith<HashNotFoundException> { api.rename(stale, "again") }
+        assertEquals(moved.hash, error.currentHash, "so a caller can re-read rather than give up")
+        assertEquals(stale.id, error.ref.id)
     }
 
     @Test

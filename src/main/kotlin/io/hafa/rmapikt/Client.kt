@@ -205,7 +205,10 @@ public class RemarkableClient internal constructor(
         // hash-only lookup would edit whichever of them the root happened to list first
         val index = entries.indexOfFirst { it.id == ref.id.value && it.hash == ref.hash }
         if (index < 0) {
-            throw HashNotFoundException(ref.hash)
+            throw HashNotFoundException(
+                ref,
+                entries.firstOrNull { it.id == ref.id.value }?.hash,
+            )
         }
         val (itemIndex, staged) = stage(entries[index], current.schemaVersion)
         entries[index] = itemIndex.entry
