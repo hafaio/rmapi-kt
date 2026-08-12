@@ -719,6 +719,41 @@ public class RemarkableClient internal constructor(
     ): ItemRef = setHighlights(ref, mapOf(pageId to highlights))
 
     /**
+     * the template name behind each page, in page order
+     *
+     * One entry per [DocumentContent.pages] entry, empty for a page with no template.
+     * Returns an empty list for a document with no `.pagedata` at all.
+     */
+    public suspend fun getPagedata(ref: ItemRef): List<String> {
+        val fileName = "${ref.id.value}$PAGEDATA_SUFFIX"
+        val entry = componentEntries(ref).firstOrNull { it.id == fileName } ?: return emptyList()
+        // exactly one trailing empty, from the terminating newline: dropping every trailing
+        // empty would lose a real final page that has no template
+        val lines = rawClient.getText(entry.id, entry.hash).split("\n")
+        return if (lines.lastOrNull() == "") lines.dropLast(1) else lines
+    }
+
+    /**
+     * writes the template name behind each page
+     *
+     * The device expects one entry per page and reads them positionally, so a list shorter
+     * than [DocumentContent.pages] silently leaves later pages without a template. Nothing
+     * here checks that, because the page list is in the `.content` and this call does not
+     * read it.
+     */
+    public suspend fun setPagedata(ref: ItemRef, templates: List<String>): ItemRef =
+        editItem(ref) { item, schemaVersion ->
+            val itemRef = ItemRef(ItemId(item.id), item.hash)
+            val components = componentEntries(itemRef).toMutableList()
+            val fileName = "${item.id}$PAGEDATA_SUFFIX"
+            val staged = rawClient.stageText(fileName, templates.joinToString("") { "$it\n" })
+            val index = components.indexOfFirst { it.id == fileName }
+            if (index < 0) components.add(staged.entry) else components[index] = staged.entry
+            val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
+            itemIndex to listOf(staged, itemIndex)
+        }
+
+    /**
      * every page's layer metadata, keyed by page id
      *
      * Only pages that carry a metadata file appear; a page whose layers have never been
