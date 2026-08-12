@@ -14,7 +14,12 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.io.encoding.Base64
 
+// `<hash>:<type>:<id>:<subfiles>:<size>`
 private const val ENTRY_FIELD_COUNT = 5
+/** the leading field of a schema 4 info line, which is always this */
+private const val INFO_MARKER = "0"
+
+// `<marker>:<id>:<count>:<size>`
 private const val INFO_FIELD_COUNT = 4
 internal const val SCHEMA_SUFFIX = ".docSchema"
 internal const val CONTENT_SUFFIX = ".content"
@@ -108,7 +113,7 @@ public class RawRemarkableClient internal constructor(
             .use { it.body.string() }
         val root = decodeResponse(RootHashResponse.serializer(), text, "root hash")
         return RootInfo(
-            hash = FileHash(root.hash),
+            hash = FileHash.ofWire(root.hash),
             generation = root.generation,
             schemaVersion = SchemaVersion.ofWire(root.schemaVersion),
         )
@@ -140,7 +145,7 @@ public class RawRemarkableClient internal constructor(
             throw GenerationException(generation)
         }
         val updated = decodeResponse(UpdatedRootResponse.serializer(), text, "updated root hash")
-        return RootUpdate(FileHash(updated.hash), updated.generation)
+        return RootUpdate(FileHash.ofWire(updated.hash), updated.generation)
     }
 
     /**
@@ -365,7 +370,7 @@ public class RawRemarkableClient internal constructor(
             ),
         ).use { it.body.string() }
         val entry = decodeResponse(NativeSimpleEntry.serializer(), text, "uploaded file")
-        return ItemRef(ItemId(entry.docID), FileHash(entry.hash))
+        return ItemRef(ItemId.ofWire(entry.docID), FileHash.ofWire(entry.hash))
     }
 
     internal fun dumpCache(): String = cache.dump()
@@ -447,14 +452,16 @@ private fun parseEntryLine(line: String): RawEntry {
     if (fields.size != ENTRY_FIELD_COUNT) {
         malformed(line, "index line '$line' was not formatted correctly")
     }
+    // the line is a five-tuple; naming the fields is what makes reading them checkable, and
+    // a wire layout cannot reorder the way the data class this rule guards would
+    @Suppress("DestructuringDeclarationWithTooManyEntries")
+    val (hash, type, id, subfiles, size) = fields
     return RawEntry(
-        type = RawEntryType.ofWire(
-            fields[1].intOrFail(line, "index line '$line' had a non-numeric type"),
-        ),
-        hash = FileHash(fields[0]),
-        id = fields[2],
-        subfiles = fields[3].intOrFail(line, "index line '$line' had a non-numeric subfile count"),
-        size = fields[4].longOrFail(line, "index line '$line' had a non-numeric size"),
+        type = RawEntryType.ofWire(type.intOrFail(line, "index line '$line' had a non-numeric type")),
+        hash = FileHash.ofWire(hash),
+        id = id,
+        subfiles = subfiles.intOrFail(line, "index line '$line' had a non-numeric subfile count"),
+        size = size.longOrFail(line, "index line '$line' had a non-numeric size"),
     )
 }
 
@@ -474,18 +481,23 @@ private fun parseSchemaFourIndex(rest: List<String>, text: String): EntryIndex {
     val info = rest.firstOrNull()
         ?: malformed(text, "schema 4 index was missing its info line")
     val fields = info.split(":")
-    if (fields.size != INFO_FIELD_COUNT || fields[0] != "0") {
+    if (fields.size != INFO_FIELD_COUNT) {
         malformed(text, "schema 4 info line '$info' was not formatted correctly")
     }
+    @Suppress("DestructuringDeclarationWithTooManyEntries")
+    val (marker, id, count, size) = fields
+    if (marker != INFO_MARKER) {
+        malformed(text, "schema 4 info line '$info' did not start with '$INFO_MARKER'")
+    }
     val entries = rest.drop(1).filter { it.isNotEmpty() }.map(::parseEntryLine)
-    val declared = fields[2].intOrFail(text, "schema 4 info line '$info' had a non-numeric count")
+    val declared = count.intOrFail(text, "schema 4 info line '$info' had a non-numeric count")
     if (declared != entries.size) {
         malformed(text, "schema 4 index declared $declared entries but listed ${entries.size}")
     }
     return EntryIndex(
         entries = entries,
-        id = fields[1],
-        size = fields[3].longOrFail(text, "schema 4 info line '$info' had a non-numeric size"),
+        id = id,
+        size = size.longOrFail(text, "schema 4 info line '$info' had a non-numeric size"),
     )
 }
 

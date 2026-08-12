@@ -217,7 +217,7 @@ public class RemarkableClient internal constructor(
 
     /** every item's id and hash, without fetching any metadata */
     public suspend fun listRefs(): List<ItemRef> =
-        rootEntries().map { ItemRef(ItemId(it.id), it.hash) }
+        rootEntries().map { ItemRef(ItemId.ofWire(it.id), it.hash) }
 
     private suspend fun componentEntries(ref: ItemRef): List<RawEntry> =
         rawClient.getEntries("${ref.id.value}$SCHEMA_SUFFIX", ref.hash).entries
@@ -239,10 +239,12 @@ public class RemarkableClient internal constructor(
      *
      * @throws ComponentNotFoundException if the item is not a template
      */
-    public suspend fun getTemplate(ref: ItemRef): TemplateDefinition =
-        component(ref, DocumentComponent.Template).let {
+    public suspend fun getTemplate(ref: ItemRef): TemplateDefinition {
+        requireKind(ref, EntryType.Template)
+        return component(ref, DocumentComponent.Template).let {
             rawClient.getTemplate(it.id, it.hash)
         }
+    }
 
     /** @throws ComponentNotFoundException if the item has no pdf */
     public suspend fun getPdf(ref: ItemRef): ByteArray =
@@ -285,6 +287,22 @@ public class RemarkableClient internal constructor(
      */
     public suspend fun getPage(ref: ItemRef, pageId: String): RmFile? =
         pagedFile(ref, pageId, PagedFile.Rm)
+
+    /**
+     * Rejects an item that is not the kind the caller asked for.
+     *
+     * `.metadata` states the kind outright, where a `.content` is told apart by which keys it
+     * has — a template's is empty and reads as a folder's. Both halves of every typed pair go
+     * through this so a read never accepts what its write would refuse.
+     */
+    private suspend fun requireKind(ref: ItemRef, expected: EntryType) {
+        val actual = getMetadata(ref).type
+        if (actual != expected) {
+            throw ValidationException(
+                "expected a ${expected.name} at '${ref.hash.hex}' but found a ${actual.name}",
+            )
+        }
+    }
 
     /** the page ids the item's `.content` declares; empty for anything but a document */
     private suspend fun declaredPages(ref: ItemRef): Set<String> =
@@ -512,12 +530,16 @@ public class RemarkableClient internal constructor(
         rawClient.uploadFile(visibleName, ByteArray(0), UploadKind.Folder)
 
     /** @throws ValidationException if the item at [ref] is not a document */
-    public suspend fun getDocumentContent(ref: ItemRef): DocumentContent =
-        getContent(ref).orFail(ref.hash)
+    public suspend fun getDocumentContent(ref: ItemRef): DocumentContent {
+        requireKind(ref, EntryType.Document)
+        return getContent(ref).orFail(ref.hash)
+    }
 
     /** @throws ValidationException if the item at [ref] is not a folder */
-    public suspend fun getCollectionContent(ref: ItemRef): CollectionContent =
-        getContent(ref).orFail(ref.hash)
+    public suspend fun getCollectionContent(ref: ItemRef): CollectionContent {
+        requireKind(ref, EntryType.Collection)
+        return getContent(ref).orFail(ref.hash)
+    }
 
     /**
      * writes a document's `.content`
@@ -548,13 +570,8 @@ public class RemarkableClient internal constructor(
         expected: EntryType,
         update: (Content) -> Content,
     ): Pair<StagedFile, List<StagedFile>> {
-        val itemRef = ItemRef(ItemId(item.id), item.hash)
-        val metadata = getMetadata(itemRef)
-        if (metadata.type != expected) {
-            throw ValidationException(
-                "expected a ${expected.name} at '${item.hash.hex}' but found a ${metadata.type.name}",
-            )
-        }
+        val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
+        requireKind(itemRef, expected)
 
         val components = componentEntries(itemRef).toMutableList()
         val index = components.indexOfFirst { it.id.endsWith(CONTENT_SUFFIX) }
@@ -586,11 +603,11 @@ public class RemarkableClient internal constructor(
         schemaVersion: SchemaVersion,
         update: (Metadata) -> Metadata,
     ): Pair<StagedFile, List<StagedFile>> {
-        val components = componentEntries(ItemRef(ItemId(item.id), item.hash)).toMutableList()
+        val components = componentEntries(ItemRef(ItemId.ofWire(item.id), item.hash)).toMutableList()
         val index = components.indexOfFirst { it.id.endsWith(METADATA_SUFFIX) }
         if (index < 0) {
             throw ComponentNotFoundException(
-                ItemRef(ItemId(item.id), item.hash),
+                ItemRef(ItemId.ofWire(item.id), item.hash),
                 DocumentComponent.Metadata,
             )
         }
@@ -623,13 +640,8 @@ public class RemarkableClient internal constructor(
         schemaVersion: SchemaVersion,
         definition: TemplateDefinition,
     ): Pair<StagedFile, List<StagedFile>> {
-        val itemRef = ItemRef(ItemId(item.id), item.hash)
-        val metadata = getMetadata(itemRef)
-        if (metadata.type != EntryType.Template) {
-            throw ValidationException(
-                "expected a Template at '${item.hash.hex}' but found a ${metadata.type.name}",
-            )
-        }
+        val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
+        requireKind(itemRef, EntryType.Template)
 
         val components = componentEntries(itemRef).toMutableList()
         val index = components.indexOfFirst { it.id.endsWith(TEMPLATE_SUFFIX) }
@@ -740,7 +752,7 @@ public class RemarkableClient internal constructor(
      */
     public suspend fun setPagedata(ref: ItemRef, templates: List<String>): ItemRef =
         editItem(ref) { item, schemaVersion ->
-            val itemRef = ItemRef(ItemId(item.id), item.hash)
+            val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
             val components = componentEntries(itemRef).toMutableList()
             val fileName = "${item.id}$PAGEDATA_SUFFIX"
             val staged = rawClient.stageText(fileName, templates.joinToString("") { "$it\n" })
@@ -813,7 +825,7 @@ public class RemarkableClient internal constructor(
         ref
     } else {
         editItem(ref) { item, schemaVersion ->
-            val itemRef = ItemRef(ItemId(item.id), item.hash)
+            val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
             val unknown = values.keys - declaredPages(itemRef)
             if (unknown.isNotEmpty()) {
                 noSuchPages(item.id, unknown)

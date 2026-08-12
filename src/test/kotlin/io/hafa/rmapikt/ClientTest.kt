@@ -941,6 +941,27 @@ class ClientTest {
     }
 
     @Test
+    fun `a read refuses the item kinds its write would refuse`() = runTest {
+        val id = java.util.UUID.randomUUID().toString()
+        val template = cloud.seed(
+            Metadata("a template", Parent.Root, false, EntryType.Template, "1700000000000"),
+            // a template's .content is empty, so it decodes as a folder's
+            CollectionContent(),
+            id = id,
+            extraFiles = mapOf("$id.template" to templateJson().toByteArray()),
+        )
+        val api = client()
+        val document = api.putPdf("doc", byteArrayOf(1))
+
+        // the shape says folder, but the metadata says template: the read must agree with
+        // setCollectionContent, which refuses it
+        assertFailsWith<ValidationException> { api.getCollectionContent(template) }
+        assertFailsWith<ValidationException> { api.getDocumentContent(template) }
+        assertFailsWith<ValidationException> { api.getTemplate(document) }
+        assertFailsWith<ValidationException> { api.setTemplate(document, definitionOf(api, template)) }
+    }
+
+    @Test
     fun `setTemplate refuses an item that is not a template`() = runTest {
         val api = client()
         val document = api.putPdf("doc", byteArrayOf(1))
@@ -1242,3 +1263,12 @@ private fun rmPage(x: Float): RmFile.Lines = RmFile.Lines(
         ),
     ),
 )
+
+private fun templateJson(): String = """
+    {"name":"grid","author":"reMarkable","iconData":"c3Zn","categories":["Planning"],
+     "orientation":"portrait","templateVersion":"1.0.0","formatVersion":1,
+     "items":[{"type":"line"}]}
+""".trimIndent()
+
+private suspend fun definitionOf(api: RemarkableClient, ref: ItemRef): TemplateDefinition =
+    api.getTemplate(ref)
