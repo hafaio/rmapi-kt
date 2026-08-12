@@ -193,6 +193,35 @@ public class RemarkableClient internal constructor(
         commitRoot(rootEntry.entry.hash, current.generation)
     }
 
+    /**
+     * Rewrites one item in place: every edit to an existing item is this shape.
+     *
+     * [stage] is handed the item's current root entry and rebuilds its component index,
+     * returning that new index plus everything the edit needs uploaded. It runs inside the
+     * retry, so it must be able to run more than once — which it can, because staging is
+     * pure and re-staging identical bytes yields the identical hash.
+     */
+    private suspend fun editItem(
+        ref: ItemRef,
+        stage: suspend (RawEntry, SchemaVersion) -> Pair<StagedFile, List<StagedFile>>,
+    ): ItemRef = withGenerationRetry {
+        val current = root()
+        val entries = rootEntries().toMutableList()
+        // both halves of the ref: under schema 3 an index hashes its entries' hashes and
+        // not their ids, so two items whose component blobs match hash the same, and a
+        // hash-only lookup would edit whichever of them the root happened to list first
+        val index = entries.indexOfFirst { it.id == ref.id.value && it.hash == ref.hash }
+        if (index < 0) {
+            throw HashNotFoundException(ref.hash)
+        }
+        val (itemIndex, staged) = stage(entries[index], current.schemaVersion)
+        entries[index] = itemIndex.entry
+        val rootEntry = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
+        uploadAll(staged + rootEntry)
+        commitRoot(rootEntry.entry.hash, current.generation)
+        ItemRef(ref.id, itemIndex.entry.hash)
+    }
+
     /** every item's id and hash, without fetching any metadata */
     public suspend fun listRefs(): List<ItemRef> =
         rootEntries().map { ItemRef(ItemId(it.id), it.hash) }
@@ -501,44 +530,41 @@ public class RemarkableClient internal constructor(
         ref: ItemRef,
         expected: EntryType,
         update: (Content) -> Content,
-    ): ItemRef = withGenerationRetry {
-        val current = root()
-        val entries = rootEntries().toMutableList()
-        val index = entries.indexOfFirst { it.hash == ref.hash }
-        if (index < 0) {
-            throw HashNotFoundException(ref.hash)
-        }
-        val item = entries[index]
-        val itemRef = ref
+    ): ItemRef = editItem(ref) { item, schemaVersion ->
+        stageContentEdit(item, schemaVersion, expected, update)
+    }
+
+    private suspend fun stageContentEdit(
+        item: RawEntry,
+        schemaVersion: SchemaVersion,
+        expected: EntryType,
+        update: (Content) -> Content,
+    ): Pair<StagedFile, List<StagedFile>> {
+        val itemRef = ItemRef(ItemId(item.id), item.hash)
         val metadata = getMetadata(itemRef)
         if (metadata.type != expected) {
             throw ValidationException(
-                "expected a ${expected.name} at '${ref.hash.hex}' but found a ${metadata.type.name}",
+                "expected a ${expected.name} at '${item.hash.hex}' but found a ${metadata.type.name}",
             )
         }
 
-        val componentEntries = componentEntries(itemRef).toMutableList()
-        val contentIndex = componentEntries.indexOfFirst { it.id.endsWith(CONTENT_SUFFIX) }
-        if (contentIndex < 0) {
+        val components = componentEntries(itemRef).toMutableList()
+        val index = components.indexOfFirst { it.id.endsWith(CONTENT_SUFFIX) }
+        if (index < 0) {
             throw ComponentNotFoundException(itemRef, DocumentComponent.Content)
         }
-        val contentEntry = componentEntries[contentIndex]
+        val entry = components[index]
         // read the raw text rather than the decoded value: a firmware quirk key the api
         // deliberately doesn't model still has to be written back exactly as it arrived
-        val original = rawClient.getText(contentEntry.id, contentEntry.hash)
-        val updated = update(decodeContent(original))
-        val stagedContent = rawClient.stageText(
-            contentEntry.id,
-            encodeContent(updated, contentQuirks(original)),
+        val original = rawClient.getText(entry.id, entry.hash)
+        val staged = rawClient.stageText(
+            entry.id,
+            encodeContent(update(decodeContent(original)), contentQuirks(original)),
         )
-        componentEntries[contentIndex] = stagedContent.entry
+        components[index] = staged.entry
 
-        val itemIndex = rawClient.stageEntries(item.id, componentEntries, current.schemaVersion)
-        entries[index] = itemIndex.entry
-        val rootEntry = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
-        uploadAll(listOf(stagedContent, itemIndex, rootEntry))
-        commitRoot(rootEntry.entry.hash, current.generation)
-        ItemRef(ref.id, itemIndex.entry.hash)
+        val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
+        return itemIndex to listOf(staged, itemIndex)
     }
 
     /**
@@ -586,19 +612,8 @@ public class RemarkableClient internal constructor(
     private suspend fun editMetadata(
         ref: ItemRef,
         update: (Metadata) -> Metadata,
-    ): ItemRef = withGenerationRetry {
-        val current = root()
-        val entries = rootEntries().toMutableList()
-        val index = entries.indexOfFirst { it.hash == ref.hash }
-        if (index < 0) {
-            throw HashNotFoundException(ref.hash)
-        }
-        val (itemIndex, staged) = stageMetadataEdit(entries[index], current.schemaVersion, update)
-        entries[index] = itemIndex.entry
-        val rootEntry = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
-        uploadAll(staged + rootEntry)
-        commitRoot(rootEntry.entry.hash, current.generation)
-        ItemRef(ref.id, itemIndex.entry.hash)
+    ): ItemRef = editItem(ref) { item, schemaVersion ->
+        stageMetadataEdit(item, schemaVersion, update)
     }
 
     /** moves an item, returning a ref to the moved item */
@@ -626,13 +641,15 @@ public class RemarkableClient internal constructor(
     public suspend fun bulkMove(refs: Collection<ItemRef>, parent: Parent): BulkResult =
         withGenerationRetry {
             val current = root()
-            val wanted = refs.associateBy { it.hash }
-            val (toUpdate, untouched) = rootEntries().partition { it.hash in wanted }
+            // keyed by id and hash together; see [editItem] for why the hash alone is not
+            // an identity, and note that keying by it would also silently drop a duplicate
+            val wanted = refs.associateBy { it.id.value to it.hash }
+            val (toUpdate, untouched) = rootEntries().partition { (it.id to it.hash) in wanted }
 
             val edits = coroutineScope {
                 toUpdate.map { item ->
                     async {
-                        item.hash to stageMetadataEdit(item, current.schemaVersion) {
+                        (item.id to item.hash) to stageMetadataEdit(item, current.schemaVersion) {
                             it.copy(parent = parent)
                         }
                     }
@@ -644,8 +661,9 @@ public class RemarkableClient internal constructor(
             uploadAll(edits.flatMap { (_, edit) -> edit.second } + rootEntry)
             commitRoot(rootEntry.entry.hash, current.generation)
 
-            val moved = edits.associate { (old, edit) ->
-                wanted.getValue(old) to ItemRef(wanted.getValue(old).id, edit.first.entry.hash)
+            val moved = edits.associate { (key, edit) ->
+                val ref = wanted.getValue(key)
+                ref to ItemRef(ref.id, edit.first.entry.hash)
             }
             BulkResult(moved = moved, notFound = (refs.toSet() - moved.keys))
         }

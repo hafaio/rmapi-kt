@@ -328,6 +328,31 @@ class ClientTest {
     }
 
     @Test
+    fun `an edit refuses a ref whose id does not match its hash`() = runTest {
+        val api = client()
+        val target = api.putPdf("target", byteArrayOf(1))
+        val other = api.putPdf("other", byteArrayOf(2))
+
+        // the hash names a real item, but paired with a different item's id
+        val mismatched = ItemRef(other.id, target.hash)
+        assertFailsWith<HashNotFoundException> { api.rename(mismatched, "renamed") }
+        assertEquals("target", api.getMetadata(target).visibleName, "the item is untouched")
+    }
+
+    @Test
+    fun `bulkMove refuses a ref whose id does not match its hash`() = runTest {
+        val api = client()
+        val target = api.putPdf("target", byteArrayOf(1))
+        val other = api.putPdf("other", byteArrayOf(2))
+
+        val mismatched = ItemRef(other.id, target.hash)
+        val result = api.bulkMove(listOf(mismatched), Parent.Trash)
+        assertEquals(emptyMap(), result.moved)
+        assertEquals(setOf(mismatched), result.notFound)
+        assertEquals(Parent.Root, api.getMetadata(target).parent, "the item is untouched")
+    }
+
+    @Test
     fun `editing an unknown hash reports it rather than corrupting the root`() = runTest {
         val error = assertFailsWith<HashNotFoundException> {
             client().rename(
