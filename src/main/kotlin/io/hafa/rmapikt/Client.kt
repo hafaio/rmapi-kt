@@ -802,13 +802,6 @@ public class RemarkableClient internal constructor(
         metadata: PageMetadata,
     ): ItemRef = setPageMetadata(ref, mapOf(pageId to metadata))
 
-    /**
-     * Describes a file a document keeps once per page.
-     *
-     * A page exists because [DocumentContent.pages] lists it. Whether it has any given one
-     * of these files is separate: the device writes each only when there is something to
-     * write, so an absent file means an empty page rather than a missing one.
-     */
     /** every page that has this file, keyed by page id */
     private suspend fun <T> pagedFiles(ref: ItemRef, kind: PagedFile<T>): Map<String, T> =
         coroutineScope {

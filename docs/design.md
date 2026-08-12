@@ -270,7 +270,8 @@ public sealed interface Tags {
 ```
 
 so `Content` is exactly three types — `CollectionContent`, `DocumentContent`,
-`TemplateContent` — and a legacy payload round-trips byte-faithfully (a `Legacy` value
+`CollectionContent` (a template's is empty and reads as one) — and a legacy payload
+round-trips byte-faithfully (a `Legacy` value
 re-encodes as strings; no silent upconversion). Discrimination becomes structural and
 simple: `templateVersion` present → template; `fileType` present → document; else
 collection — equivalent to zod's ordered strict-first union matching on all real
@@ -465,11 +466,11 @@ public class ResponseException(
     message: String,
 ) : RemarkableException(message)
 
-/** a payload didn't match the reverse-engineered schema; [rawJson] is the escape hatch */
+/** a payload didn't match the reverse-engineered schema; [rawText] is the escape hatch */
 public class ValidationException(
     message: String,
     /** the raw text that failed validation, for callers who want to parse it themselves */
-    public val rawJson: String? = null,
+    public val rawText: String? = null,
     cause: Throwable? = null,
 ) : RemarkableException(message, cause)
 
@@ -480,7 +481,7 @@ public class HashNotFoundException(public val hash: FileHash) :
 /** the item exists but lacks the requested component (e.g. no .epub on a pdf doc) */
 public class ComponentNotFoundException(
     public val ref: ItemRef,
-    public val component: DocumentComponent,   // Content | Metadata | Pdf | Epub
+    public val component: DocumentComponent,   // Content | Metadata | Pdf | Epub | Template
 ) : RemarkableException("no $component in item ${ref.id.value}")
 ```
 

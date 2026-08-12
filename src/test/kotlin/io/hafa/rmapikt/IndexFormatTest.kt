@@ -104,9 +104,21 @@ class IndexFormatTest {
         val collections = listOf(
             RawEntry(RawEntryType.Collection, repeatedHash('d'), "item", 3, 99),
         )
-        val staged = staging.stageEntries("root", collections, SchemaVersion.V3)
+        val staged = staging.stageEntries("a-document", collections, SchemaVersion.V3)
         assertEquals("3\n${"d".repeat(64)}:80000000:item:3:99\n", bodyOf(staged))
         assertEquals(collections, parseEntryIndex(bodyOf(staged)).entries)
+    }
+
+    @Test
+    fun `a schema 3 root index is refused rather than warned about`() {
+        // the cloud answers a schema 3 root with a 400 "Software must be updated", so staging
+        // one only defers the failure to a request that cannot succeed
+        val error = assertFailsWith<IllegalArgumentException> {
+            staging.stageEntries(ROOT_LIST, emptyList(), SchemaVersion.V3)
+        }
+        assertTrue("schema 4" in error.message.orEmpty(), error.message.orEmpty())
+        // an item index may still be schema 3, which is what an older account uses
+        staging.stageEntries("a-document", emptyList(), SchemaVersion.V3)
     }
 
     @Test

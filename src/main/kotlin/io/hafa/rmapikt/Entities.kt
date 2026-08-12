@@ -2,7 +2,6 @@ package io.hafa.rmapikt
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonObject
 
 private val HASH_REGEX = Regex("^[0-9a-f]{64}$")
 private val UUID_REGEX =

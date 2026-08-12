@@ -256,7 +256,7 @@ different problem with a different handler than the API refusing a request.
 Decoding is **strict** — a key this library doesn't model is an error rather than
 something silently dropped, because a read-modify-write that dropped it would destroy
 whatever the device stored there. The cost is that a field added by new firmware fails
-the parse until this library is updated; `ValidationException.rawJson` and the low-level
+the parse until this library is updated; `ValidationException.rawText` and the low-level
 `api.raw` client both hand you the payload so you are never locked out of your data.
 
 ## Installation
