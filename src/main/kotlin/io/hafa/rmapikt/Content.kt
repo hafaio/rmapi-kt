@@ -183,12 +183,7 @@ public data class CPagePage(
     public val verticalScroll: CPageNumberValue? = null,
     /** unknown: a page the device treats as deleted */
     public val deleted: CPageNumberValue? = null,
-    /**
-     * speculative: when the page was last modified, epoch milliseconds as a string
-     *
-     * Spelled as the device spells it. Unlike its neighbours it is a bare string rather
-     * than a timestamped value, so it is not a [CPageStringValue].
-     */
+    /** speculative: when the page was last modified, in the device's own spelling */
     public val modifed: String? = null,
 )
 
