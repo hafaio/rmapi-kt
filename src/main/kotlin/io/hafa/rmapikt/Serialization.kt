@@ -106,10 +106,11 @@ internal object ContentSerializer : JsonContentPolymorphicSerializer<Content>(Co
  * Keys reMarkable writes into `.content` that this library deliberately does not model.
  *
  * `modifed` is the device's own misspelling of `modified`, present on a minority of
- * documents. Modelling it would put a firmware typo into the public api, where a caller
- * would have to decide what to do with it; rejecting it would make those documents
- * unreadable. So it is neither: stripped before decoding and put back on the way out, so a
- * read-modify-write leaves it exactly as it found it.
+ * documents. Modelling it at the top level would put a firmware typo into the public api,
+ * where a caller would have to decide what to do with it; rejecting it would make those
+ * documents unreadable. So it is neither: stripped before decoding and put back on the way
+ * out, so a read-modify-write leaves it exactly as it found it. Top level only; the same key
+ * inside `cPages` is a field, since a strict decode needs it modelled.
  */
 private val CONTENT_QUIRK_KEYS = setOf("modifed")
 
