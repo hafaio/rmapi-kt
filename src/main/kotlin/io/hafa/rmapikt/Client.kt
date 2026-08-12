@@ -136,10 +136,10 @@ public class RemarkableClient internal constructor(
     private var lastRoot: RootInfo? = null
 
     /**
-     * re-reads the root index, discarding this client's cached view of it
+     * re-reads the root index
      *
-     * Only needed to observe someone else's change; this client's own writes keep its view
-     * current, and a lost race is retried without any help.
+     * Only needed to observe someone else's change: this client's own writes keep its view
+     * current, and a lost race is retried without help.
      */
     public suspend fun refreshRoot(): RootInfo = rawClient.getRootHash().also { lastRoot = it }
 
@@ -242,10 +242,7 @@ public class RemarkableClient internal constructor(
         component(ref, DocumentComponent.Metadata).let { rawClient.getMetadata(it.id, it.hash) }
 
     /**
-     * the item's `.template` file
-     *
-     * Only template items have one; a template's `.content` is empty, so this is where its
-     * definition lives.
+     * A template's `.content` is empty, so its definition lives here instead.
      *
      * @throws ComponentNotFoundException if the item is not a template
      */
@@ -320,20 +317,18 @@ public class RemarkableClient internal constructor(
         (getContent(ref) as? DocumentContent)?.pages.orEmpty().toSet()
 
     /**
-     * every component file of the item, packed into one zip archive
+     * every component file of the item, zipped
      *
-     * This is a transfer format for round-tripping a document through [importArchive]; it
-     * is not the document itself. For the pdf or epub use [getPdf]/[getEpub]; for the
-     * component files as data, walk the item with [raw].
+     * A transfer format for round-tripping through [importArchive], not the document itself
+     * — for that use [getPdf]/[getEpub], or walk the item with [raw].
      */
     public suspend fun exportArchive(ref: ItemRef): ByteArray = zipArchive(documentFiles(ref))
 
     /**
      * restores an archive produced by [exportArchive]
      *
-     * Every archived file is re-uploaded under a fresh document id unless
-     * [ImportOptions.id] says otherwise. This takes an archive, not a pdf: to add a pdf use
-     * [putPdf] or [uploadPdf].
+     * Lands under a fresh id unless [ImportOptions.id] says otherwise. Takes an archive, not
+     * a pdf — for that use [putPdf] or [uploadPdf].
      */
     public suspend fun importArchive(
         archive: ByteArray,
@@ -708,14 +703,14 @@ public class RemarkableClient internal constructor(
         return itemIndex to (staged + itemIndex)
     }
 
-    /** moves an item, returning a ref to the moved item */
+    /** moves an item */
     public suspend fun move(ref: ItemRef, parent: Parent): ItemRef =
         editMetadata(ref) { it.copy(parent = parent) }
 
     /** moves an item to the trash; reMarkable has no hard delete */
     public suspend fun trash(ref: ItemRef): ItemRef = move(ref, Parent.Trash)
 
-    /** renames an item, returning a ref to the renamed item */
+    /** renames an item */
     public suspend fun rename(ref: ItemRef, visibleName: String): ItemRef =
         editMetadata(ref) { it.copy(visibleName = visibleName) }
 
@@ -724,11 +719,10 @@ public class RemarkableClient internal constructor(
         editMetadata(ref) { it.copy(pinned = starred) }
 
     /**
-     * moves many items in one root write
+     * moves many items in a single root write
      *
-     * A ref that isn't in the current root index is reported in [BulkResult.notFound]
-     * rather than moved, because a partial move is a normal outcome of racing another
-     * client and should not fail the whole batch.
+     * Racing another client is normal, so a ref no longer in the root index is reported in
+     * [BulkResult.notFound] rather than failing the batch.
      */
     public suspend fun bulkMove(refs: Collection<ItemRef>, parent: Parent): BulkResult =
         withGenerationRetry {
@@ -764,7 +758,7 @@ public class RemarkableClient internal constructor(
     public suspend fun bulkTrash(refs: Collection<ItemRef>): BulkResult =
         bulkMove(refs, Parent.Trash)
 
-    /** the cache as a string, to hand to [SessionOptions.cache] in a later session */
+    /** to hand back as [SessionOptions.cache] in a later session */
     public fun dumpCache(): String = rawClient.dumpCache()
 
     /** empties the cache */

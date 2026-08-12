@@ -302,13 +302,20 @@ everything, use the entries immediately, and `awaitAll` uploads inside their own
 `coroutineScope` — same concurrency, honest ownership, and no raw-API method needs a
 `CoroutineScope` parameter.
 
-The split also makes the generation retry in §D12 correct rather than merely possible.
-Staging touches no network, so a mutating operation stages every blob once — ids and
-timestamps included — and then retries only the commit, re-sending identical bytes. Were
-hashing and uploading one call, each attempt would produce a fresh set of blobs that no
-root would ever reference. This is why `stageFile`/`stageText`/`stageContent` are named for
-what they do rather than for the `put*` they correspond to on the wire: they do not put
-anything.
+The split also suits the generation retry in §D12, though it is not what makes it correct.
+What prevents a retry from stranding blobs is minting ids and timestamps *before* the retry
+loop — a fresh uuid per attempt would produce a fresh set of files nothing references, and
+that is true whether or not hashing and uploading are one call. Because the store is
+content-addressed, re-sending identical bytes yields the identical hash and orphans nothing.
+What staging contributes is that re-running it is free and deterministic: `editItem` stages
+inside the retry, so every attempt after the first re-derives hashes the cache already knows
+and uploads nothing. This is why `stageFile`/`stageText`/`stageContent` are named for what
+they do rather than for the `put*` they correspond to on the wire: they do not put anything.
+
+*Known gap*: nothing requires a staged file to be uploaded before an index references it.
+`stageEntries` accepts bare `RawEntry` values, so committing a root that points at bytes
+never sent is expressible, if not currently done. Making the index builders take
+`StagedFile` would close it.
 
 No blocking/Java facade in v1 — Java callers bridge with
 `kotlinx.coroutines.future.future {}` (README shows it). *Rejected*: `Flow` variants

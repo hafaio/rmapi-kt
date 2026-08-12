@@ -22,6 +22,8 @@ import kotlinx.serialization.json.jsonObject
 private const val FILE_TYPE_KEY = "fileType"
 
 /**
+ * Decodes and encodes the files the cloud stores.
+ *
  * `ignoreUnknownKeys = false` is the library's decoding policy, not an incidental setting:
  * a payload carrying a key we don't model is reported rather than silently accepted, so a
  * read-modify-write can never write back a file with the unrecognised part missing. The
@@ -150,8 +152,10 @@ private fun parseObject(text: String, what: String): JsonObject = try {
 }
 
 /**
- * Parses [text] as [what], reporting a malformed payload as a [ValidationException] that
- * still carries the original text.
+ * Parses [text] as [what].
+ *
+ * A malformed payload is reported as a [ValidationException] that still carries the
+ * original text.
  *
  * The api is reverse-engineered, so a parse failure is as likely to mean the cloud changed
  * as it is to mean the caller did something wrong; either way the caller keeps the option
