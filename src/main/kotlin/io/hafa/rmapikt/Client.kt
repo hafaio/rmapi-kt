@@ -1031,8 +1031,44 @@ internal sealed class PagedFile<T>(private val suffix: String) {
     }
 }
 
+/**
+ * how the document is scaled to the screen, read back from the flat wire fields
+ *
+ * Null when the `.content` has no `zoomMode`, or when it says `customFit` without carrying
+ * all six numbers a [Zoom.Custom] needs — a state the wire can hold and this type cannot.
+ */
+public val DocumentContent.zoom: Zoom?
+    get() = when (zoomMode) {
+        null -> null
+        ZoomMode.BestFit -> Zoom.BestFit
+        ZoomMode.FitToHeight -> Zoom.FitToHeight
+        ZoomMode.FitToWidth -> Zoom.FitToWidth
+        ZoomMode.CustomFit -> Zoom.Custom(
+            scale = customZoomScale ?: return null,
+            centerX = customZoomCenterX ?: return null,
+            centerY = customZoomCenterY ?: return null,
+            pageWidth = customZoomPageWidth ?: return null,
+            pageHeight = customZoomPageHeight ?: return null,
+            orientation = customZoomOrientation ?: return null,
+        )
+    }
+
+/** the same content scaled a different way, with every `customZoom*` field rewritten */
+public fun DocumentContent.withZoom(zoom: Zoom): DocumentContent {
+    val custom = zoom as? Zoom.Custom
+    return copy(
+        zoomMode = zoom.mode,
+        customZoomScale = custom?.scale,
+        customZoomCenterX = custom?.centerX,
+        customZoomCenterY = custom?.centerY,
+        customZoomPageWidth = custom?.pageWidth,
+        customZoomPageHeight = custom?.pageHeight,
+        customZoomOrientation = custom?.orientation,
+    )
+}
+
 /** the wire's flat mode value for a [Zoom] */
-private val Zoom.mode: ZoomMode
+internal val Zoom.mode: ZoomMode
     get() = when (this) {
         Zoom.BestFit -> ZoomMode.BestFit
         Zoom.FitToHeight -> ZoomMode.FitToHeight

@@ -186,6 +186,14 @@ api.setDocumentContent(ref, content.copy(textScale = 1.5, lineHeight = 200))
 Keys the wire carries but this library doesn't model are preserved from what's already
 stored, so writing back a value that never saw them can't drop them.
 
+`zoom` reads the flat `zoomMode` and `customZoom*` fields back as the sealed `Zoom`, and
+`withZoom` writes all seven together so a stale custom number can't outlive its mode:
+
+```kotlin
+val content = api.getDocumentContent(ref)
+api.setDocumentContent(ref, content.withZoom(Zoom.BestFit))
+```
+
 ### Two ways to add a document
 
 These are different mechanisms, not synonyms:
