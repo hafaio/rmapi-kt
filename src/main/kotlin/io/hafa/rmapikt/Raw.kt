@@ -73,6 +73,10 @@ private data class UploadMeta(@SerialName("file_name") val fileName: String)
  * makes no request, a caller can stage everything once, then retry the commit as many times
  * as it needs, re-sending byte-identical blobs. A combined hash-and-upload would mint a
  * fresh set of orphans on every attempt.
+ *
+ * A staged file is inert: nothing is sent until [RawRemarkableClient.upload], and the whole
+ * transfer runs in the calling coroutine, so concurrency, cancellation, and failure follow
+ * the caller's scope.
  */
 public class StagedFile internal constructor(
     /** the index entry describing this file */
@@ -292,7 +296,7 @@ public class RawRemarkableClient internal constructor(
         )
     }
 
-    /** sends a staged file, skipping the request entirely if the hash is already known */
+    /** sends one staged file; a hash the store already has costs no request */
     public suspend fun upload(staged: StagedFile) {
         val hash = staged.entry.hash.hex
         if (cache[hash] == null) {

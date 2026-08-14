@@ -125,6 +125,8 @@ public class RemarkableClient internal constructor(
     /** the low-level api, for operations this one doesn't cover */
     public val raw: RawRemarkableClient get() = rawClient
 
+    private val rootLock = Any()
+
     @Volatile
     private var lastRoot: RootInfo? = null
 
@@ -132,10 +134,32 @@ public class RemarkableClient internal constructor(
      * re-reads the root index
      *
      * Only needed to observe someone else's change: this client's own writes keep its view
-     * current, and a lost race is retried without help.
+     * current, and a lost race is retried without help. A read that comes back older than
+     * what is already cached is discarded, and the cached root returned instead.
      */
-    public suspend fun refreshRoot(): RootInfo = rawClient.getRootHash().also { lastRoot = it }
+    public suspend fun refreshRoot(): RootInfo {
+        val fetched = rawClient.getRootHash()
+        return synchronized(rootLock) {
+            val cached = lastRoot
+            // a slow read can land after a newer write, and taking it would rewind the
+            // cache to a root the account has already moved past
+            if (cached == null || fetched.generation >= cached.generation) {
+                lastRoot = fetched
+                fetched
+            } else {
+                cached
+            }
+        }
+    }
 
+    /**
+     * The cached root, fetched on first use.
+     *
+     * Two calls can return different roots, so a mutating operation must take one snapshot
+     * and derive both the entries it merges and the generation it commits against from it.
+     * Mixing two would commit one root's entries against another's generation, which the
+     * server accepts, reverting whatever landed in between.
+     */
     private suspend fun root(): RootInfo = lastRoot ?: refreshRoot()
 
     private suspend fun commitRoot(hash: FileHash, generation: Long) {
@@ -152,8 +176,10 @@ public class RemarkableClient internal constructor(
     /**
      * Re-runs [operation] when it loses a race for the root index.
      *
-     * The caller must mint any ids and timestamps *before* calling this, so that a retry
-     * re-uploads the identical blobs instead of orphaning a fresh set on every attempt.
+     * A lost race means the entry list the new root was built from is stale, so everything
+     * derived from it is rebuilt per attempt. Ids and timestamps are minted before the call
+     * — minting inside would orphan a fresh set of blobs each time — and re-sending the
+     * blobs themselves costs nothing, as the cache skips a hash the store already has.
      */
     private suspend fun <T> withGenerationRetry(operation: suspend () -> T): T {
         var attempt = 0
@@ -170,57 +196,85 @@ public class RemarkableClient internal constructor(
         }
     }
 
-    private suspend fun rootEntries(): List<RawEntry> =
-        rawClient.getEntries(ROOT_SCHEMA, root().hash).entries
-
     private suspend fun uploadAll(staged: List<StagedFile>): Unit = coroutineScope {
         staged.map { async { rawClient.upload(it) } }.awaitAll()
     }
 
-    /** Adds a freshly built item to the root index, under an id nothing else can hold. */
-    private suspend fun commitNewItem(entry: RawEntry) = withGenerationRetry {
-        val current = root()
-        val entries = rootEntries() + entry
-        val rootEntry = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
-        rawClient.upload(rootEntry)
-        commitRoot(rootEntry.entry.hash, current.generation)
+    /**
+     * Adds a freshly built item to the root index, sending every blob in one wave.
+     *
+     * [files] are the item's component blobs and [docSchema] the index listing them.
+     * Staging the new root index needs only [docSchema]'s hash, not its upload, so all of
+     * them go out in one parallel batch together with the root index.
+     */
+    private suspend fun commitNewItem(files: List<StagedFile>, docSchema: StagedFile) =
+        withGenerationRetry {
+            val current = root()
+            val entries = rawClient.getEntries(ROOT_SCHEMA, current.hash).entries
+            // ids are minted UUIDs, so a collision means a bug up the stack; appending
+            // anyway would commit a root holding two items under one id
+            check(entries.none { it.id == docSchema.entry.id }) {
+                "id '${docSchema.entry.id}' is already in the root index"
+            }
+            val rootIndex =
+                rawClient.stageEntries(ROOT_LIST, entries + docSchema.entry, SchemaVersion.V4)
+            uploadAll(files + docSchema + rootIndex)
+            commitRoot(rootIndex.entry.hash, current.generation)
+        }
+
+    /**
+     * Swaps [ref]'s root entry for [docSchema]'s, sending every blob in one wave.
+     *
+     * [files] are the component blobs the edit rewrote and [docSchema] the rebuilt index
+     * listing them; the same one-batch reasoning as [commitNewItem] applies.
+     *
+     * Matching the entry on id and hash together: under schema 3 an index hashes its
+     * entries' hashes and not their ids, so two items whose component blobs match hash
+     * the same, and a hash-only lookup would edit whichever the root listed first.
+     *
+     * @throws HashNotFoundException if [ref] has since been written over
+     */
+    private suspend fun commitEdit(
+        ref: ItemRef,
+        files: List<StagedFile>,
+        docSchema: StagedFile,
+    ): ItemRef {
+        withGenerationRetry {
+            val attempt = root()
+            val entries = rawClient.getEntries(ROOT_SCHEMA, attempt.hash).entries.toMutableList()
+            val index = entries.indexOfFirst { it.id == ref.id.value && it.hash == ref.hash }
+            if (index < 0) {
+                throw HashNotFoundException(ref, entries.firstOrNull { it.id == ref.id.value }?.hash)
+            }
+            entries[index] = docSchema.entry
+            val rootIndex = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
+            uploadAll(files + docSchema + rootIndex)
+            commitRoot(rootIndex.entry.hash, attempt.generation)
+        }
+        return ItemRef(ref.id, docSchema.entry.hash)
     }
 
     /**
-     * Rewrites one item in place: every edit to an existing item is this shape.
+     * Starts an edit: refuses a ref the root does not list, and gives the schema version.
      *
-     * [stage] is handed the item's current root entry and rebuilds its component index,
-     * returning that new index plus everything the edit needs uploaded. It runs inside the
-     * retry, so it must be able to run more than once — which it can, because staging is
-     * pure and re-staging identical bytes yields the identical hash.
+     * A stale or fabricated ref fails as [HashNotFoundException] before any component is
+     * fetched or staged, instead of surfacing as whatever fetching a hash the store never
+     * held happens to throw. The merge in [commitEdit] checks again from the snapshot it
+     * commits, so this is the early report, not the guard.
      */
-    private suspend fun editItem(
-        ref: ItemRef,
-        stage: suspend (RawEntry, SchemaVersion) -> Pair<StagedFile, List<StagedFile>>,
-    ): ItemRef = withGenerationRetry {
+    private suspend fun beginEdit(ref: ItemRef): SchemaVersion {
         val current = root()
-        val entries = rootEntries().toMutableList()
-        // both halves of the ref: under schema 3 an index hashes its entries' hashes and
-        // not their ids, so two items whose component blobs match hash the same, and a
-        // hash-only lookup would edit whichever of them the root happened to list first
-        val index = entries.indexOfFirst { it.id == ref.id.value && it.hash == ref.hash }
-        if (index < 0) {
-            throw HashNotFoundException(
-                ref,
-                entries.firstOrNull { it.id == ref.id.value }?.hash,
-            )
+        val entries = rawClient.getEntries(ROOT_SCHEMA, current.hash).entries
+        if (entries.none { it.id == ref.id.value && it.hash == ref.hash }) {
+            throw HashNotFoundException(ref, entries.firstOrNull { it.id == ref.id.value }?.hash)
         }
-        val (itemIndex, staged) = stage(entries[index], current.schemaVersion)
-        entries[index] = itemIndex.entry
-        val rootEntry = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
-        uploadAll(staged + rootEntry)
-        commitRoot(rootEntry.entry.hash, current.generation)
-        ItemRef(ref.id, itemIndex.entry.hash)
+        return current.schemaVersion
     }
 
     /** every item's id and hash, without fetching any metadata */
     public suspend fun listRefs(): List<ItemRef> =
-        rootEntries().map { ItemRef(ItemId.ofWire(it.id), it.hash) }
+        rawClient.getEntries(ROOT_SCHEMA, root().hash).entries
+            .map { ItemRef(ItemId.ofWire(it.id), it.hash) }
 
     private suspend fun componentEntries(ref: ItemRef): List<RawEntry> =
         rawClient.getEntries("${ref.id.value}$SCHEMA_SUFFIX", ref.hash).entries
@@ -306,7 +360,6 @@ public class RemarkableClient internal constructor(
         }
     }
 
-    /** the page ids the item's `.content` declares; empty for anything but a document */
     /**
      * The page ids the item's `.content` declares, or every page it has a file for.
      *
@@ -371,14 +424,9 @@ public class RemarkableClient internal constructor(
                 rawClient.stageFile(newPath, bytes)
             }
         }
-        val documentEntry = rawClient.stageEntries(
-            newId.value,
-            staged.map { it.entry },
-            schemaVersion,
-        )
-        uploadAll(staged + documentEntry)
-        commitNewItem(documentEntry.entry)
-        return ItemRef(newId, documentEntry.entry.hash)
+        val docSchema = rawClient.stageEntries(newId.value, staged.map { it.entry }, schemaVersion)
+        commitNewItem(staged, docSchema)
+        return ItemRef(newId, docSchema.entry.hash)
     }
 
     private fun restoredMetadata(
@@ -438,10 +486,9 @@ public class RemarkableClient internal constructor(
             rawClient.stageFile("$id$PAGEDATA_SUFFIX", "\n".encodeToByteArray()),
             rawClient.stageFile("$id.${fileType.extension}", bytes),
         )
-        val itemEntry = rawClient.stageEntries(id, staged.map { it.entry }, schemaVersion)
-        uploadAll(staged + itemEntry)
-        commitNewItem(itemEntry.entry)
-        return ItemRef(ItemId(id), itemEntry.entry.hash)
+        val docSchema = rawClient.stageEntries(id, staged.map { it.entry }, schemaVersion)
+        commitNewItem(staged, docSchema)
+        return ItemRef(ItemId(id), docSchema.entry.hash)
     }
 
     private fun newDocumentMetadata(
@@ -519,10 +566,9 @@ public class RemarkableClient internal constructor(
             rawClient.stageContent("$id$CONTENT_SUFFIX", CollectionContent()),
             rawClient.stageMetadata("$id$METADATA_SUFFIX", metadata),
         )
-        val itemEntry = rawClient.stageEntries(id, staged.map { it.entry }, schemaVersion)
-        uploadAll(staged + itemEntry)
-        commitNewItem(itemEntry.entry)
-        return ItemRef(ItemId(id), itemEntry.entry.hash)
+        val docSchema = rawClient.stageEntries(id, staged.map { it.entry }, schemaVersion)
+        commitNewItem(staged, docSchema)
+        return ItemRef(ItemId(id), docSchema.entry.hash)
     }
 
     /**
@@ -573,23 +619,14 @@ public class RemarkableClient internal constructor(
         ref: ItemRef,
         expected: EntryType,
         update: (Content) -> Content,
-    ): ItemRef = editItem(ref) { item, schemaVersion ->
-        stageContentEdit(item, schemaVersion, expected, update)
-    }
+    ): ItemRef {
+        val schemaVersion = beginEdit(ref)
+        requireKind(ref, expected)
 
-    private suspend fun stageContentEdit(
-        item: RawEntry,
-        schemaVersion: SchemaVersion,
-        expected: EntryType,
-        update: (Content) -> Content,
-    ): Pair<StagedFile, List<StagedFile>> {
-        val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
-        requireKind(itemRef, expected)
-
-        val components = componentEntries(itemRef).toMutableList()
+        val components = componentEntries(ref).toMutableList()
         val index = components.indexOfFirst { it.id.endsWith(CONTENT_SUFFIX) }
         if (index < 0) {
-            throw ComponentNotFoundException(itemRef, DocumentComponent.Content)
+            throw ComponentNotFoundException(ref, DocumentComponent.Content)
         }
         val entry = components[index]
         // read the raw text rather than the decoded value: a firmware quirk key the api
@@ -600,29 +637,25 @@ public class RemarkableClient internal constructor(
             encodeContent(update(decodeContent(original)), contentQuirks(original)).encodeToByteArray(),
         )
         components[index] = staged.entry
-
-        val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
-        return itemIndex to listOf(staged, itemIndex)
+        val docSchema = rawClient.stageEntries(ref.id.value, components, schemaVersion)
+        return commitEdit(ref, listOf(staged), docSchema)
     }
 
     /**
-     * Rewrites one item's `.metadata`, returning its new index entry and what to upload.
+     * Rewrites one item's `.metadata`, returning the new file and the docSchema listing it.
      *
      * Bumping `version` and setting `metadatamodified` is what tells the device the change
      * came from somewhere other than itself.
      */
     private suspend fun stageMetadataEdit(
-        item: RawEntry,
+        item: ItemRef,
         schemaVersion: SchemaVersion,
         update: (Metadata) -> Metadata,
-    ): Pair<StagedFile, List<StagedFile>> {
-        val components = componentEntries(ItemRef(ItemId.ofWire(item.id), item.hash)).toMutableList()
+    ): Pair<StagedFile, StagedFile> {
+        val components = componentEntries(item).toMutableList()
         val index = components.indexOfFirst { it.id.endsWith(METADATA_SUFFIX) }
         if (index < 0) {
-            throw ComponentNotFoundException(
-                ItemRef(ItemId.ofWire(item.id), item.hash),
-                DocumentComponent.Metadata,
-            )
+            throw ComponentNotFoundException(item, DocumentComponent.Metadata)
         }
         val entry = components[index]
         val current = rawClient.getMetadata(entry.id, entry.hash)
@@ -631,8 +664,7 @@ public class RemarkableClient internal constructor(
         }
         val staged = rawClient.stageMetadata(entry.id, updated)
         components[index] = staged.entry
-        val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
-        return itemIndex to listOf(staged, itemIndex)
+        return staged to rawClient.stageEntries(item.id.value, components, schemaVersion)
     }
 
     /**
@@ -643,29 +675,19 @@ public class RemarkableClient internal constructor(
      *
      * @throws ValidationException if the item at [ref] is not a template
      */
-    public suspend fun setTemplate(ref: ItemRef, definition: TemplateDefinition): ItemRef =
-        editItem(ref) { item, schemaVersion ->
-            stageTemplateEdit(item, schemaVersion, definition)
-        }
+    public suspend fun setTemplate(ref: ItemRef, definition: TemplateDefinition): ItemRef {
+        val schemaVersion = beginEdit(ref)
+        requireKind(ref, EntryType.Template)
 
-    private suspend fun stageTemplateEdit(
-        item: RawEntry,
-        schemaVersion: SchemaVersion,
-        definition: TemplateDefinition,
-    ): Pair<StagedFile, List<StagedFile>> {
-        val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
-        requireKind(itemRef, EntryType.Template)
-
-        val components = componentEntries(itemRef).toMutableList()
+        val components = componentEntries(ref).toMutableList()
         val index = components.indexOfFirst { it.id.endsWith(TEMPLATE_SUFFIX) }
         if (index < 0) {
-            throw ComponentNotFoundException(itemRef, DocumentComponent.Template)
+            throw ComponentNotFoundException(ref, DocumentComponent.Template)
         }
         val staged = rawClient.stageTemplate(components[index].id, definition)
         components[index] = staged.entry
-
-        val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
-        return itemIndex to listOf(staged, itemIndex)
+        val docSchema = rawClient.stageEntries(ref.id.value, components, schemaVersion)
+        return commitEdit(ref, listOf(staged), docSchema)
     }
 
     /**
@@ -683,8 +705,9 @@ public class RemarkableClient internal constructor(
     private suspend fun editMetadata(
         ref: ItemRef,
         update: (Metadata) -> Metadata,
-    ): ItemRef = editItem(ref) { item, schemaVersion ->
-        stageMetadataEdit(item, schemaVersion, update)
+    ): ItemRef {
+        val (metadataFile, docSchema) = stageMetadataEdit(ref, beginEdit(ref), update)
+        return commitEdit(ref, listOf(metadataFile), docSchema)
     }
 
     /**
@@ -763,18 +786,17 @@ public class RemarkableClient internal constructor(
      * here checks that, because the page list is in the `.content` and this call does not
      * read it.
      */
-    public suspend fun setPagedata(ref: ItemRef, templates: List<String>): ItemRef =
-        editItem(ref) { item, schemaVersion ->
-            val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
-            requireKind(itemRef, EntryType.Document)
-            val components = componentEntries(itemRef).toMutableList()
-            val fileName = "${item.id}$PAGEDATA_SUFFIX"
-            val staged = rawClient.stageFile(fileName, templates.joinToString("") { "$it\n" }.encodeToByteArray())
-            val index = components.indexOfFirst { it.id == fileName }
-            if (index < 0) components.add(staged.entry) else components[index] = staged.entry
-            val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
-            itemIndex to listOf(staged, itemIndex)
-        }
+    public suspend fun setPagedata(ref: ItemRef, templates: List<String>): ItemRef {
+        val schemaVersion = beginEdit(ref)
+        requireKind(ref, EntryType.Document)
+        val components = componentEntries(ref).toMutableList()
+        val fileName = "${ref.id.value}$PAGEDATA_SUFFIX"
+        val staged = rawClient.stageFile(fileName, templates.joinToString("") { "$it\n" }.encodeToByteArray())
+        val index = components.indexOfFirst { it.id == fileName }
+        if (index < 0) components.add(staged.entry) else components[index] = staged.entry
+        val docSchema = rawClient.stageEntries(ref.id.value, components, schemaVersion)
+        return commitEdit(ref, listOf(staged), docSchema)
+    }
 
     /**
      * every page's layer metadata, keyed by page id
@@ -831,33 +853,31 @@ public class RemarkableClient internal constructor(
     ): ItemRef = if (values.isEmpty()) {
         ref
     } else {
-        editItem(ref) { item, schemaVersion ->
-            val itemRef = ItemRef(ItemId.ofWire(item.id), item.hash)
-            val unknown = values.keys - declaredPages(itemRef)
-            if (unknown.isNotEmpty()) {
-                noSuchPages(item.id, unknown)
-            }
-
-            // the device writes one of these only when there is something to write, so a
-            // first write adds an entry where a later one replaces it
-            val components = componentEntries(itemRef).toMutableList()
-            val existing = components.withIndex()
-                .mapNotNull { (index, entry) -> kind.pageIdOf(item.id, entry.id)?.to(index) }
-                .toMap()
-            val staged = values.map { (pageId, value) ->
-                kind.stage(rawClient, kind.fileName(item.id, pageId), value)
-                    .also { file ->
-                        val index = existing[pageId]
-                        if (index == null) {
-                            components.add(file.entry)
-                        } else {
-                            components[index] = file.entry
-                        }
-                    }
-            }
-            val itemIndex = rawClient.stageEntries(item.id, components, schemaVersion)
-            itemIndex to (staged + itemIndex)
+        val schemaVersion = beginEdit(ref)
+        val unknown = values.keys - declaredPages(ref)
+        if (unknown.isNotEmpty()) {
+            noSuchPages(ref.id.value, unknown)
         }
+
+        // the device writes one of these only when there is something to write, so a
+        // first write adds an entry where a later one replaces it
+        val components = componentEntries(ref).toMutableList()
+        val existing = components.withIndex()
+            .mapNotNull { (index, entry) -> kind.pageIdOf(ref.id.value, entry.id)?.to(index) }
+            .toMap()
+        val staged = values.map { (pageId, value) ->
+            kind.stage(rawClient, kind.fileName(ref.id.value, pageId), value)
+                .also { file ->
+                    val index = existing[pageId]
+                    if (index == null) {
+                        components.add(file.entry)
+                    } else {
+                        components[index] = file.entry
+                    }
+                }
+        }
+        val docSchema = rawClient.stageEntries(ref.id.value, components, schemaVersion)
+        commitEdit(ref, staged, docSchema)
     }
 
     /** moves an item */
@@ -881,39 +901,65 @@ public class RemarkableClient internal constructor(
      * Racing another client is normal, so a ref no longer in the root index is reported in
      * [BulkResult.notFound] rather than failing the batch.
      */
-    public suspend fun bulkMove(refs: Collection<ItemRef>, parent: Parent): BulkResult =
-        withGenerationRetry {
-            val current = root()
-            // keyed by id and hash together; see [editItem] for why the hash alone is not
-            // an identity, and note that keying by it would also silently drop a duplicate
-            val wanted = refs.associateBy { it.id.value to it.hash }
-            val (toUpdate, untouched) = rootEntries().partition { (it.id to it.hash) in wanted }
-            // the server accepts an unchanged root and still burns a generation
-            if (toUpdate.isEmpty()) {
-                return@withGenerationRetry BulkResult(emptyMap(), refs.toSet())
-            }
-
-            val edits = coroutineScope {
-                toUpdate.map { item ->
-                    async {
-                        (item.id to item.hash) to stageMetadataEdit(item, current.schemaVersion) {
-                            it.copy(parent = parent)
-                        }
-                    }
-                }.awaitAll()
-            }
-
-            val entries = untouched + edits.map { (_, edit) -> edit.first.entry }
-            val rootEntry = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
-            uploadAll(edits.flatMap { (_, edit) -> edit.second } + rootEntry)
-            commitRoot(rootEntry.entry.hash, current.generation)
-
-            val moved = edits.associate { (key, edit) ->
-                val ref = wanted.getValue(key)
-                ref to ItemRef(ref.id, edit.first.entry.hash)
-            }
-            BulkResult(moved = moved, notFound = (refs.toSet() - moved.keys))
+    public suspend fun bulkMove(refs: Collection<ItemRef>, parent: Parent): BulkResult {
+        val current = root()
+        // keyed on both halves, per [commitEdit], and keying on the hash alone would also
+        // silently drop a duplicate ref
+        val wanted = refs.associateBy { it.id.value to it.hash }
+        val toUpdate = rawClient.getEntries(ROOT_SCHEMA, current.hash).entries
+            .filter { (it.id to it.hash) in wanted }
+        if (toUpdate.isEmpty()) {
+            return BulkResult(emptyMap(), refs.toSet())
         }
+
+        val staged = coroutineScope {
+            toUpdate.map { item ->
+                async {
+                    val (metadataFile, docSchema) = stageMetadataEdit(
+                        ItemRef(ItemId.ofWire(item.id), item.hash),
+                        current.schemaVersion,
+                    ) { it.copy(parent = parent) }
+                    Triple(item, metadataFile, docSchema)
+                }
+            }.awaitAll()
+        }
+        val files = staged.flatMap { (_, metadataFile, docSchema) ->
+            listOf(metadataFile, docSchema)
+        }
+        val edits = staged.associate { (item, _, docSchema) ->
+            (item.id to item.hash) to docSchema.entry
+        }
+
+        // an item another client wrote in the meantime is no longer at the hash these
+        // rebuilt indexes were derived from, so it drops out of the merge and is reported
+        // as not found rather than being written over
+        val rewritten = withGenerationRetry {
+            val attempt = root()
+            val entries = rawClient.getEntries(ROOT_SCHEMA, attempt.hash).entries
+            val applied = entries.mapNotNull { entry ->
+                edits[entry.id to entry.hash]?.let { (entry.id to entry.hash) to it }
+            }
+            // the server accepts an unchanged root and still burns a generation
+            if (applied.isEmpty()) {
+                emptyList()
+            } else {
+                val rootIndex = rawClient.stageEntries(
+                    ROOT_LIST,
+                    entries.map { edits[it.id to it.hash] ?: it },
+                    SchemaVersion.V4,
+                )
+                uploadAll(files + rootIndex)
+                commitRoot(rootIndex.entry.hash, attempt.generation)
+                applied
+            }
+        }
+
+        val moved = rewritten.associate { (key, entry) ->
+            val ref = wanted.getValue(key)
+            ref to ItemRef(ref.id, entry.hash)
+        }
+        return BulkResult(moved = moved, notFound = (refs.toSet() - moved.keys))
+    }
 
     /** trashes many items in one root write; see [bulkMove] */
     public suspend fun bulkTrash(refs: Collection<ItemRef>): BulkResult =

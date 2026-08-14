@@ -47,6 +47,7 @@ class MockCloud(
 
     private val blobs = ConcurrentHashMap<String, ByteArray>()
     private val root = AtomicReference("")
+    private val staleRead = AtomicLong(-1)
     private val gen = AtomicLong(1)
     private val rejectNext = AtomicBoolean(false)
 
@@ -107,6 +108,11 @@ class MockCloud(
     /** makes the next root write fail as a stale generation, simulating a lost race */
     fun rejectNextRootWrite() {
         rejectNext.set(true)
+    }
+
+    /** serves the next root read at [generation], simulating a read that resolves late */
+    fun staleNextRootRead(generation: Long) {
+        staleRead.set(generation)
     }
 
     /** the bytes stored under [hash], whether seeded or uploaded by the client */
@@ -178,7 +184,8 @@ class MockCloud(
         val target = request.target
         return when {
             target == "/sync/v4/root" -> json(
-                """{"hash":"${root.get()}","generation":${gen.get()},""" +
+                """{"hash":"${root.get()}",""" +
+                    """"generation":${staleRead.getAndSet(-1).takeIf { it >= 0 } ?: gen.get()},""" +
                     """"schemaVersion":${schemaVersion.wire}}""",
             )
             target == "/sync/v3/root" -> writeRoot(body)

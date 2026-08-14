@@ -969,6 +969,20 @@ class ClientTest {
     }
 
     @Test
+    fun `refreshRoot keeps its view when a stale read resolves after a newer write`() = runTest {
+        val api = client()
+        api.putPdf("first", byteArrayOf(1))
+        val current = api.refreshRoot()
+
+        cloud.staleNextRootRead(current.generation - 1)
+        assertEquals(current, api.refreshRoot(), "the older read is refused")
+
+        // and the cache is still usable: an edit commits against the generation it kept
+        val ref = api.listRefs().single()
+        assertEquals("renamed", api.getMetadata(api.rename(ref, "renamed")).visibleName)
+    }
+
+    @Test
     fun `a document the device never opened still has readable, writable pages`() = runTest {
         val id = java.util.UUID.randomUUID().toString()
         // pages is null until the device opens the document, but the .rm files are there
