@@ -295,29 +295,50 @@ thread. Generation conflicts throw `GenerationException` and invalidate the clie
 cached root — retry policy is the caller's beyond the two layers in §D12.
 
 **Hashing and uploading are separate operations.** Hashing a file is pure, local, and
-cheap; uploading is neither. Combining them would mean handing back a value together with
-an already-running background job — a `Deferred` with no owner, which structured
-concurrency exists to avoid. So the raw client splits them into **stage + upload**:
-`stageFile(...)` is pure (hash computed locally; returns the entry plus the bytes to
-send) and `suspend fun upload(staged)` performs the PUT. High-level ops stage
-everything, use the entries immediately, and `awaitAll` uploads inside their own
-`coroutineScope` — same concurrency, honest ownership, and no raw-API method needs a
-`CoroutineScope` parameter.
+cheap; uploading is neither. So the raw client splits them into **stage + upload**:
+`stageFile(...)` is pure — it hashes locally and returns a `StagedFile`, the entry that
+names the file bound to the bytes it describes — and `upload(staged)` sends that file and
+nothing else. A staged file is inert: nothing is in flight until it is uploaded, and the
+transfer runs in the calling coroutine. What this rules out is starting the upload at
+*stage* time, which would hand back a value plus an already-running job — a `Deferred`
+with no owner, which structured concurrency exists to avoid. It is a constraint on when
+sending starts, not on where the method lives.
+rmapi-js does start eagerly, returning a `PendingEntry` whose async disposal awaits the
+transfer, because `await using` is the nearest thing JavaScript has to a scope that waits
+for its children; Kotlin has the scope itself. High-level ops stage everything, use the
+entries immediately, and `awaitAll` the uploads inside their own `coroutineScope` — the
+same fan-out and join, owned by the language, with no raw-API method needing a
+`CoroutineScope` parameter. The eager start would need exactly that parameter on every
+stage call (or a client-owned scope, and with it a client lifecycle). `upload` stays on the
+client rather than on `StagedFile`, so a staged file is a value of entry, name, and bytes
+with no session bound into it.
 
-The split also suits the generation retry in §D12, though it is not what makes it correct.
-What prevents a retry from stranding blobs is minting ids and timestamps *before* the retry
-loop — a fresh uuid per attempt would produce a fresh set of files nothing references, and
-that is true whether or not hashing and uploading are one call. Because the store is
-content-addressed, re-sending identical bytes yields the identical hash and orphans nothing.
-What staging contributes is that re-running it is free and deterministic: `editItem` stages
-inside the retry, so every attempt after the first re-derives hashes the cache already knows
-and uploads nothing. This is why `stageFile`/`stageText`/`stageContent` are named for what
-they do rather than for the `put*` they correspond to on the wire: they do not put anything.
+The split is what lets an edit send everything in one wave. Building the new root index
+needs the docSchema's *hash*, not its upload, so nothing has to be in the store before the
+root index is staged: an operation stages its changed components and the docSchema over
+them, holds the two as separate values, and hands both to `commitEdit` (or `commitNewItem`),
+which stages the new root index, uploads all of them at once, and commits. rmapi-js gets the
+same overlap from its eager uploads — `putEntries(ROOT_LIST, ...)` starts while the
+metadata and docSchema puts are still in flight, and `await using` joins the lot. Waiting
+for the components before staging the root index would cost a round trip on every edit.
+This is also why `stageFile`/`stageContent`/`stageRm` are named for what they do rather
+than for the `put*` they correspond to on the wire: they do not put anything.
 
-*Known gap*: nothing requires a staged file to be uploaded before an index references it.
-`stageEntries` accepts bare `RawEntry` values, so committing a root that points at bytes
-never sent is expressible, if not currently done. Making the index builders take
-`StagedFile` would close it.
+The whole wave sits inside the generation retry (§D12), which costs nothing: a second
+attempt rebuilds only the root index, over the entry list it just re-read, and re-sending
+the components and docSchema is free, as the cache skips every hash the store already has.
+
+`stageEntries` takes `RawEntry` rather than `StagedFile`, as rmapi-js's `putEntries` does,
+and has to: an edit rebuilds an index mostly out of rows read off the server, for files that
+already exist and must not be re-sent. So nothing in the raw tier can stop a caller
+committing a root that points at bytes never sent. The high-level client closes it in
+`commitEdit`, `commitNewItem`, and `bulkMove`'s own merge, which take the staged component
+files and the docSchema as separate values and upload exactly those together with the root
+index they stage — the entry spliced into the root comes from the same `StagedFile` that
+is uploaded, so a committed docSchema cannot be one that was never sent. There is no
+aggregate type
+carrying "the files of an edit": each operation keeps what it staged in its own locals,
+which is why nothing ever has to re-find the docSchema inside a collection.
 
 No blocking/Java facade in v1 — Java callers bridge with
 `kotlinx.coroutines.future.future {}` (README shows it). *Rejected*: `Flow` variants
@@ -616,12 +637,18 @@ That is why `AuthedHttp` raises the internal `PreconditionFailedException` rathe
 retrying, and why `RawRemarkable.putRootHash` — the only place that knows which
 generation was sent — converts it into the public `GenerationException`.
 
+Each attempt reads the root exactly once and derives both the entry list it merges and
+the generation it commits against from that single `RootInfo`. Reading the root twice in
+one attempt could interleave with another operation on the same client — a commit updates
+the cached root, a failed one invalidates it — and merging one generation's entries into
+a commit against another's generation can *succeed*, silently reverting whatever landed
+in between.
+
 **The load-bearing detail**: every minted value (document ids, page ids, timestamps) is
-resolved *before* the retry loop, so a retry re-uploads byte-identical blobs. Minting
-inside the loop would orphan a fresh set of blobs on every attempt, and since the store
-is content-addressed and append-only, nothing would ever clean them up. `putPdf`,
-`putFolder`, and `putDocument` all resolve their ids and timestamps first for this
-reason; a test asserts that a conflict-and-retry does not re-upload the document body.
+resolved *before* the retry loop, so a retry re-sends byte-identical blobs and the cache
+skips them. Minting inside the loop would produce a fresh set on every
+attempt, and since the store is content-addressed and append-only, nothing would ever clean
+them up. A test asserts that a conflict-and-retry does not re-upload the document body.
 
 
 ---
