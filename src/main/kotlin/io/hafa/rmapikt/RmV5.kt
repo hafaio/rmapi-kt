@@ -40,10 +40,6 @@ public data class RmPoint(
  *
  * Several tools appear twice because the v5 format renumbered them; both spellings are
  * listed so a raw value maps to the same concept regardless of which format wrote it.
- *
- * This list is not exhaustive and cannot be: reMarkable adds tools. A sweep of a real
- * account turned up tool 23, which no public source names, so it is deliberately absent
- * rather than guessed at — [RmStroke.penRaw] still carries it, and [RmStroke.pen] is null.
  */
 public enum class RmPen(
     /** the value stored in the file */
@@ -79,6 +75,9 @@ public enum class RmPen(
     /** a calligraphy pen */
     Calligraphy(21),
 
+    /** a shader */
+    Shader(23),
+
     /** a paintbrush, as renumbered by the v5 format */
     BrushV5(12),
 
@@ -101,16 +100,19 @@ public enum class RmPen(
     HighlighterV5(18);
 
     internal companion object {
-        fun ofRaw(raw: Int): RmPen? = entries.firstOrNull { it.raw == raw }
+        fun of(raw: Int, rawText: String? = null): RmPen = entries.firstOrNull { it.raw == raw }
+            ?: throw ValidationException("unknown pen code $raw", rawText)
     }
 }
 
 /**
  * the stroke colours reMarkable records
  *
- * As with [RmPen] this is not exhaustive. A sweep of a real account turned up colours 9
- * through 12 — the palette the Paper Pro added — which no public source names reliably, so
- * they are left unnamed; [RmStroke.colorRaw] carries the value and [RmStroke.color] is null.
+ * As with [RmPen] a colour can be spelled twice: the Paper Pro extended the palette and
+ * gave green and yellow a second code. Which shade a name renders as is up to the device.
+ *
+ * [Highlight] marks a stroke rather than naming a shade. The colour it is drawn in lives in
+ * a version 6 field this library keeps as raw block bytes but does not decode.
  */
 public enum class RmColor(
     /** the value stored in the file */
@@ -141,26 +143,35 @@ public enum class RmColor(
     Red(7),
 
     /** grey, as used where strokes overlap */
-    GreyOverlap(8);
+    GreyOverlap(8),
+
+    /** a highlight rather than a shade */
+    Highlight(9),
+
+    /** green, as the Paper Pro palette spells it */
+    GreenPaperPro(10),
+
+    /** cyan */
+    Cyan(11),
+
+    /** magenta */
+    Magenta(12),
+
+    /** yellow, as the Paper Pro palette spells it */
+    YellowPaperPro(13);
 
     internal companion object {
-        fun ofRaw(raw: Int): RmColor? = entries.firstOrNull { it.raw == raw }
+        fun of(raw: Int, rawText: String? = null): RmColor = entries.firstOrNull { it.raw == raw }
+            ?: throw ValidationException("unknown colour code $raw", rawText)
     }
 }
 
-/**
- * one continuous pen stroke
- *
- * [penRaw] and [colorRaw] are always the values the file carried; [pen] and [color] are
- * null when the device wrote something this library doesn't have a name for, which is what
- * happens when reMarkable adds a tool. Reading is not destructive, so an unrecognised tool
- * is surfaced rather than rejected.
- */
+/** one continuous pen stroke */
 public data class RmStroke(
-    /** the tool value stored in the file */
-    public val penRaw: Int,
-    /** the colour value stored in the file */
-    public val colorRaw: Int,
+    /** the tool it was drawn with */
+    public val pen: RmPen,
+    /** the colour it was drawn in */
+    public val color: RmColor,
     /** the stroke's base width, before per-point variation */
     public val width: Float,
     /** the sampled points, in the order they were drawn */
@@ -169,13 +180,7 @@ public data class RmStroke(
     public val reserved: Int = 0,
     /** a further such word, which a version 3 page does not have */
     public val reservedV5: Int = 0,
-) {
-    /** the tool, when it is one this library knows */
-    public val pen: RmPen? get() = RmPen.ofRaw(penRaw)
-
-    /** the colour, when it is one this library knows */
-    public val color: RmColor? get() = RmColor.ofRaw(colorRaw)
-}
+)
 
 /** one layer of a page, drawn in order */
 public data class RmLayer(
@@ -205,8 +210,8 @@ private fun readStroke(body: ByteBuffer, version: Int, header: String): RmStroke
     requireValid(body.remaining() >= fixedWords * Int.SIZE_BYTES + Int.SIZE_BYTES, header) {
         "a stroke header ran past the end of the file"
     }
-    val pen = body.int
-    val color = body.int
+    val pen = RmPen.of(body.int, header)
+    val color = RmColor.of(body.int, header)
     val reserved = body.int
     val width = body.float
     val reservedV5 = if (version == 5) body.int else 0
@@ -216,8 +221,8 @@ private fun readStroke(body: ByteBuffer, version: Int, header: String): RmStroke
         RmPoint(body.float, body.float, body.float, body.float, body.float, body.float)
     }
     return RmStroke(
-        penRaw = pen,
-        colorRaw = color,
+        pen = pen,
+        color = color,
         width = width,
         points = points,
         reserved = reserved,
@@ -261,8 +266,8 @@ internal fun serializeRmV5(file: RmFile.Lines): ByteArray {
     for (layer in file.layers) {
         out.putInt(layer.strokes.size)
         for (stroke in layer.strokes) {
-            out.putInt(stroke.penRaw)
-            out.putInt(stroke.colorRaw)
+            out.putInt(stroke.pen.raw)
+            out.putInt(stroke.color.raw)
             out.putInt(stroke.reserved)
             out.putFloat(stroke.width)
             if (file.version == 5) {

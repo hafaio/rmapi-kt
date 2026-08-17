@@ -450,7 +450,7 @@ class ClientTest {
             val lines = assertIs<RmFile.Lines>(file)
             lines.copy(
                 layers = lines.layers.map { layer ->
-                    layer.copy(strokes = layer.strokes.map { it.copy(colorRaw = RmColor.Blue.raw) })
+                    layer.copy(strokes = layer.strokes.map { it.copy(color = RmColor.Blue) })
                 },
             )
         }
@@ -1381,8 +1381,8 @@ private fun rmPage(x: Float): RmFile.Lines = RmFile.Lines(
         RmLayer(
             listOf(
                 RmStroke(
-                    penRaw = RmPen.FinelinerV5.raw,
-                    colorRaw = RmColor.Black.raw,
+                    pen = RmPen.FinelinerV5,
+                    color = RmColor.Black,
                     width = 2.0f,
                     points = listOf(RmPoint(x, 2f, 3f, 4f, 5f, 6f)),
                 ),
