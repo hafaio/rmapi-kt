@@ -215,8 +215,8 @@ private fun readLineItem(reader: TaggedReader, blockVersion: Int): ParentedStrok
 }
 
 private fun readLine(reader: TaggedReader, blockVersion: Int): RmStroke {
-    val tool = reader.int(1)
-    val color = reader.int(2)
+    val pen = RmPen.of(reader.int(1))
+    val color = RmColor.of(reader.int(2))
     val thickness = reader.double(3)
     reader.float(4)
 
@@ -228,8 +228,8 @@ private fun readLine(reader: TaggedReader, blockVersion: Int): RmStroke {
         )
     }
     return RmStroke(
-        penRaw = tool,
-        colorRaw = color,
+        pen = pen,
+        color = color,
         width = thickness.toFloat(),
         points = List(pointBytes / pointSize) { reader.readPoint(pointSize) },
     )

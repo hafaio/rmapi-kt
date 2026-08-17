@@ -729,8 +729,10 @@ and a refusal on write, both wrong.
 
 *Still unmodelled*: text, glyphs, and the editing history — block types `0x00`, `0x01`,
 `0x03`, `0x04`, `0x07`, `0x08`, `0x09`, `0x0A`, and `0x0D` are framed and kept but not
-interpreted. The sweep also saw tool 23 and colours 9-12, which are surfaced as raw values
-because no public source names them; inventing names would be a guess in the API itself.
+interpreted. The tool 23 and colours 9-12 the sweep saw are now named — the shader and the
+palette the Paper Pro added — so `RmStroke` carries `RmPen` and `RmColor` rather than the
+raw codes, and a code neither names is a `ValidationException` like any other byte this
+library cannot account for.
 
 ---
 

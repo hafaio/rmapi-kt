@@ -8,7 +8,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertFailsWith
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -117,18 +116,48 @@ class RmParsingTest {
     }
 
     @Test
-    fun `an unrecognised tool keeps its raw value instead of failing`() {
+    fun `an unrecognised tool is refused rather than read as a stroke`() {
         val file = RmWriter().header(3)
             .int(1).int(1)
-            .int(9999).int(4242).int(0)
+            .int(9999).int(0).int(0)
             .float(1f)
             .int(0)
 
-        val stroke = (parseRmFile(file.bytes()) as RmFile.Lines).layers.single().strokes.single()
-        assertEquals(9999, stroke.penRaw)
-        assertEquals(4242, stroke.colorRaw)
-        assertNull(stroke.pen, "a tool reMarkable added later must not be an error")
-        assertNull(stroke.color)
+        val failure = assertFailsWith<ValidationException> { parseRmFile(file.bytes()) }
+        assertEquals("unknown pen code 9999", failure.message)
+    }
+
+    @Test
+    fun `an unrecognised colour is refused the same way`() {
+        val file = RmWriter().header(3)
+            .int(1).int(1)
+            .int(4).int(4242).int(0)
+            .float(1f)
+            .int(0)
+
+        val failure = assertFailsWith<ValidationException> { parseRmFile(file.bytes()) }
+        assertEquals("unknown colour code 4242", failure.message)
+    }
+
+    @Test
+    fun `the codes a sweep of a real account turned up have names`() {
+        val file = RmWriter().header(3).int(1).int(5)
+        for (color in 9..13) {
+            file.int(23).int(color).int(0).float(1f).int(0)
+        }
+
+        val strokes = (parseRmFile(file.bytes()) as RmFile.Lines).layers.single().strokes
+        assertEquals(List(5) { RmPen.Shader }, strokes.map { it.pen })
+        assertEquals(
+            listOf(
+                RmColor.Highlight,
+                RmColor.GreenPaperPro,
+                RmColor.Cyan,
+                RmColor.Magenta,
+                RmColor.YellowPaperPro,
+            ),
+            strokes.map { it.color },
+        )
     }
 
     @Test
@@ -474,8 +503,8 @@ class RmParsingTest {
                 RmLayer(
                     listOf(
                         RmStroke(
-                            penRaw = RmPen.FinelinerV5.raw,
-                            colorRaw = RmColor.Blue.raw,
+                            pen = RmPen.FinelinerV5,
+                            color = RmColor.Blue,
                             width = 2.0f,
                             points = listOf(RmPoint(1f, 2f, 3f, 4f, 5f, 6f)),
                         ),
