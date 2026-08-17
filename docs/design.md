@@ -824,12 +824,14 @@ rmapi-kt/
     ├── Entities.kt             # ItemRef, Parent, the Entry hierarchy, ids and hashes
     ├── Content.kt              # the Content hierarchy, Metadata, CPages, wire enums
     ├── Serialization.kt        # Parent/Tags serializers, Content discrimination
-    ├── RmV5.kt                 # .rm point/stroke/layer types, the v3/v5 parser  (§D13)
+    ├── RmPage.kt               # what every .rm version decodes to: point/stroke/layer,
+    │                           #   the pen and colour codes, the shared header  (§D13)
+    ├── RmV5.kt                 # the v3/v5 parser and serializer  (§D13)
     ├── RmV6.kt                 # RmBlock, the v6 tagged encoding and scene decoding
     ├── Http.kt                 # internal: OkHttp suspend adapter, transient retries
     ├── Cache.kt                # internal: CacheEntry, LruCache, versioned dump/load
     ├── Digest.kt               # internal: sha256, crc32c, hex helpers
-    ├── Errors.kt               # the RemarkableException hierarchy
+    ├── Errors.kt               # the RemarkableException hierarchy and requireValid
     └── Devices.kt              # DeviceModel / DeviceScreen / deviceScreens
 ```
 

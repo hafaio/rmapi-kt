@@ -49,6 +49,12 @@ public class ValidationException(
     cause: Throwable? = null,
 ) : RemarkableException(message, cause)
 
+internal fun requireValid(condition: Boolean, header: String, message: () -> String) {
+    if (!condition) {
+        throw ValidationException(message(), header)
+    }
+}
+
 /** the hash passed in isn't an entry of the current root index */
 public class HashNotFoundException(
     /** the ref that was looked for */
