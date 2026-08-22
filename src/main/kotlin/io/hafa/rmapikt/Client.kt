@@ -120,10 +120,20 @@ public data class BulkResult(
 @Suppress("TooManyFunctions")
 public class RemarkableClient internal constructor(
     private val rawClient: RawRemarkableClient,
+    sessionToken: SessionToken,
     private val maxGenerationRetries: Int,
 ) {
     /** the low-level api, for operations this one doesn't cover */
     public val raw: RawRemarkableClient get() = rawClient
+
+    /**
+     * the id this client registered under
+     *
+     * The uuid handed to [register], which reMarkable stamps on everything this client
+     * does, and so what tells this client's changes apart from a tablet's. Read out of the
+     * session token, which carries it.
+     */
+    public val deviceId: DeviceId by lazy { deviceIdOf(sessionToken) }
 
     private val rootLock = Any()
 

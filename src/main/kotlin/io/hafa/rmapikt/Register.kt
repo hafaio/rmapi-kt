@@ -2,13 +2,23 @@ package io.hafa.rmapikt
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.coroutines.executeAsync
 import java.util.UUID
+import kotlin.io.encoding.Base64
 
 private const val CONNECT_CODE_LENGTH = 8
+
+/** the claim reMarkable puts the registering uuid in */
+private const val DEVICE_ID_CLAIM = "device-id"
+
+/** a jwt's payload is base64url, and unpadded */
+private val BASE64_CLAIMS = Base64.UrlSafe.withPadding(Base64.PaddingOption.ABSENT_OPTIONAL)
 
 /** eight million characters, which holds a large account's indexes and metadata */
 private const val DEFAULT_MAX_CACHE_BYTES = 8L * 1024 * 1024
@@ -40,6 +50,38 @@ public value class SessionToken(
     /** the token as issued */
     public val value: String,
 )
+
+/**
+ * the id reMarkable stamps on the work a device does
+ *
+ * A client's is the uuid it passed to [register]; a tablet reports its serial number
+ * instead, and the cloud reports one or the other for every change made to the account.
+ */
+@JvmInline
+public value class DeviceId(
+    /** the id as reMarkable spells it */
+    public val value: String,
+)
+
+/**
+ * Reads the device id out of a token.
+ *
+ * Both token kinds are jwts carrying the registering uuid in a `device-id` claim, so the
+ * id costs nothing to recover and there is nothing to persist alongside the token. The
+ * claim set is the identity provider's rather than reMarkable's, so it is read for that
+ * one key instead of being modelled.
+ */
+internal fun deviceIdOf(token: SessionToken): DeviceId {
+    // neither message carries the token: an exception is a thing that gets logged
+    val payload = token.value.split(".").getOrNull(1)
+        ?: throw ValidationException("the session token is not a jwt, so it names no device")
+    val id = runCatching {
+        wireJson.parseToJsonElement(BASE64_CLAIMS.decode(payload).toString(Charsets.UTF_8))
+            .jsonObject[DEVICE_ID_CLAIM]?.jsonPrimitive?.contentOrNull
+    }.getOrNull()
+        ?: throw ValidationException("the session token carries no $DEVICE_ID_CLAIM claim")
+    return DeviceId(id)
+}
 
 /** the reMarkable services this library talks to */
 public object Hosts {
@@ -243,7 +285,7 @@ public fun session(
         uploadHost = options.uploadHost,
         maxCachedBlobBytes = options.maxCachedBlobBytes,
     )
-    return RemarkableClient(raw, options.maxGenerationRetries)
+    return RemarkableClient(raw, sessionToken, options.maxGenerationRetries)
 }
 
 /**
