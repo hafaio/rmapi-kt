@@ -142,6 +142,32 @@ class RegisterTest {
     }
 
     @Test
+    fun `a client knows the id it registered under`() {
+        // a jwt whose payload is {"device-id":"5bd526e8-a264-4e7b-ac82-78fbd72960b8"}
+        val token = SessionToken(
+            "header.eyJkZXZpY2UtaWQiOiI1YmQ1MjZlOC1hMjY0LTRlN2ItYWM4Mi03OGZiZDcyOTYwYjgifQ.sig",
+        )
+        assertEquals(DeviceId("5bd526e8-a264-4e7b-ac82-78fbd72960b8"), deviceIdOf(token))
+        assertEquals(
+            DeviceId("5bd526e8-a264-4e7b-ac82-78fbd72960b8"),
+            session(token, SessionOptions(httpClient = http)).deviceId,
+        )
+    }
+
+    @Test
+    fun `a token that names no device says so rather than guessing`() {
+        val notJwt = assertFailsWith<ValidationException> { deviceIdOf(SessionToken("opaque")) }
+        assertEquals("the session token is not a jwt, so it names no device", notJwt.message)
+        // {"sub":"someone"}, then a payload that is not json at all
+        for (payload in listOf("eyJzdWIiOiJzb21lb25lIn0", "bm90IGpzb24")) {
+            val nameless = assertFailsWith<ValidationException> {
+                deviceIdOf(SessionToken("header.$payload.sig"))
+            }
+            assertEquals("the session token carries no device-id claim", nameless.message)
+        }
+    }
+
+    @Test
     fun `every device description has the wire value the cloud expects`() {
         assertEquals(
             listOf(
