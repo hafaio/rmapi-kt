@@ -55,9 +55,11 @@ public value class SessionToken(
  * the id reMarkable stamps on the work a device does
  *
  * A client's is the uuid it passed to [register]; a tablet reports its serial number
- * instead, and the cloud reports one or the other for every change made to the account.
+ * instead. It is what [SyncEventAttributes.sourceDeviceID] reports and what
+ * [RemarkableClient.deviceId] compares against.
  */
 @JvmInline
+@Serializable
 public value class DeviceId(
     /** the id as reMarkable spells it */
     public val value: String,
@@ -285,7 +287,13 @@ public fun session(
         uploadHost = options.uploadHost,
         maxCachedBlobBytes = options.maxCachedBlobBytes,
     )
-    return RemarkableClient(raw, sessionToken, options.maxGenerationRetries)
+    val socket = NotificationSocket(
+        httpClient = options.httpClient,
+        sessionToken = sessionToken.value,
+        rawHost = options.rawHost,
+        maxTransientRetries = options.maxTransientRetries,
+    )
+    return RemarkableClient(raw, socket, sessionToken, options.maxGenerationRetries)
 }
 
 /**

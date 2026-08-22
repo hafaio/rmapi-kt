@@ -227,6 +227,26 @@ val archive = api.exportArchive(ref)      // a zip of every component file
 val restored = api.importArchive(archive)       // always under a fresh id
 ```
 
+### Hearing about changes
+
+reMarkable pushes a notification whenever a device finishes syncing, over a websocket the
+client holds open:
+
+```kotlin
+api.notifications()
+    .filter { it.attributes.sourceDeviceID != api.deviceId }   // skip your own syncs
+    .collect { show(api.refreshRoot()) }
+```
+
+A notification names the device that synced and says nothing about what changed, so reading
+is still how you find out. `api.deviceId` is the uuid this client registered under, which
+reMarkable stamps on its work, so comparing the two is how you ignore your own. Other kinds
+of event share the socket — screen sharing among them — and never reach the flow. The socket is reopened whenever the account drops it, which it does every couple
+of minutes; leaving the flow closes it. It is not a queue — what happens between two sockets
+is not replayed — so anything that must not miss a change still reads on its own schedule.
+A session token lasts a few hours, and a flow collected past that eventually fails to
+reconnect: build a new client with a fresh token.
+
 ## Configuration
 
 ```kotlin
