@@ -79,6 +79,18 @@ class ClientTest {
         .toSet()
 
     @Test
+    fun `raw reads and writes the root without being told what it is called`() = runTest {
+        val api = client()
+        val folder = api.putFolder("things")
+        val root = api.refreshRoot()
+
+        val entries = api.raw.getRootEntries(root.hash).entries
+        assertTrue(entries.any { it.id == folder.id.value })
+        // restaging what was just read reproduces the root, so neither name was guessed
+        assertEquals(root.hash, api.raw.stageRootEntries(entries).entry.hash)
+    }
+
+    @Test
     fun `listing an empty account returns nothing`() = runTest {
         assertEquals(emptyMap(), client().metadataByRef())
     }
