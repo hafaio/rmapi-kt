@@ -786,6 +786,14 @@ the shape and the reasoning behind it.
 raw tier is genuinely dangerous — a bad root write can orphan an account — so it sits behind
 a property rather than mixed into the main surface, and its KDoc says so.
 
+**The root is a method, not a name.** `getRootEntries` and `stageRootEntries` exist because
+the alternative is a caller spelling `"root.docSchema"` to read and `"root"` to write, with
+two special cases they cannot see: the root must be schema 4, which reMarkable enforces with
+a 400 and "Software must be updated", and the index names itself `.` rather than `root`.
+Publishing those strings would publish the names without the behaviour behind them, so the
+strings stay internal and the schema argument disappears — the root's one legal schema is
+not a runtime `require` when it can be the only thing the signature allows.
+
 Both are classes with internal constructors, not interfaces over hidden implementations. An
 interface was tried and removed. Three reasons: adding a method to a published interface
 breaks every implementor, and this api is still moving; an interface with exactly one
