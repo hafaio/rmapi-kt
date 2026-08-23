@@ -92,7 +92,8 @@ from constructing the component files locally, which is why the API keeps both (
 
 **Dead ends**, recorded so they are not rediscovered: sync10 and the
 `/sync/v2/signed-urls/*` endpoints are gone; `POST /sync/v2/sync-complete` is a no-op stub.
-Notifying other devices is purely the `broadcast: true` flag on the root PUT.
+Telling other devices something changed is purely the `broadcast: true` flag on the root
+PUT; *hearing* it is a websocket, which is a separate mechanism and §D14.
 
 **Provenance.** The wire understanding here draws on the open-source
 [rmapi-js](https://github.com/erikbrinkman/rmapi-js) and Go
@@ -218,8 +219,16 @@ public data class SessionOptions(
 `.content`/`.metadata` files, so a key the library doesn't model must not be quietly
 discarded on the way back out. There are two ways to guarantee that: carry unknown keys
 through untouched, or refuse to decode a payload you don't fully understand. This library
-takes the second — `ignoreUnknownKeys = false` on *every* wire type, with an unrecognised
-key raising `ValidationException`.
+takes the second — `ignoreUnknownKeys = false` on *every* stored wire type, with an
+unrecognised key raising `ValidationException`.
+
+The one exception is what the notification socket pushes (§D14), decoded through a second
+`Json` that ignores unknown keys. Every reason for the rule is absent there: a notification
+is never written back, so there is no round trip to lose a key from; the socket is shared
+with event families this library does not model; and rmfakecloud sends a subset of what
+reMarkable does. It is reached through its own `decodePushed` rather than a policy argument
+on `decodeWire`, so that relaxing strictness stays a decision about a kind of payload and
+never something a call site can opt into.
 
 *Rationale*: simplicity, chosen over resilience with the trade understood. Passthrough
 costs an `extra: JsonObject` on a dozen types, a serializer that splits and re-merges
@@ -341,8 +350,9 @@ carrying "the files of an edit": each operation keeps what it staged in its own 
 which is why nothing ever has to re-find the docSchema inside a collection.
 
 No blocking/Java facade in v1 — Java callers bridge with
-`kotlinx.coroutines.future.future {}` (README shows it). *Rejected*: `Flow` variants
-(rejected), callback/`CompletableFuture` surface, exposing hot `Deferred`s.
+`kotlinx.coroutines.future.future {}` (README shows it). *Rejected*: `Flow` variants of the
+listing calls, callback/`CompletableFuture` surface, exposing hot `Deferred`s. The one flow
+in the api is a stream of events with no list form (§D14).
 
 ### D6. Type modeling
 
@@ -736,6 +746,34 @@ library cannot account for.
 
 ---
 
+### D14. Notifications
+
+`RemarkableClient.notifications(): Flow<SyncEvent>` over
+`{rawHost}/notifications/ws/json/1`, reopened for as long as the flow is collected. A frame
+is a wire type like any other, and names the device that synced and nothing about what
+changed, so `refreshRoot` is the answer to one and comparing against `deviceId` is how a
+client ignores its own writes. The endpoint and the reconnect rule follow rmapi-js's
+`listen()`, being the protocol.
+
+Three things the code cannot say for itself:
+
+- **The socket is shared.** Screen-sharing and passcode events arrive on it with attributes
+  shaped differently, so a frame that is not a `SyncComplete` is passed over rather than
+  refused. Those are not syncs failing to parse, and raising on them would kill a listener
+  the moment a user shares their screen.
+- **rmfakecloud sends less** than reMarkable does, which is why only `sourceDeviceID` and
+  `auth0UserID` are non-null.
+- **The account ends a socket every couple of minutes**, measured, whether or not anything
+  was said on it — so reconnecting is the feature and not error handling. The loop reuses
+  §D12's transient backoff and counts only failures to *open*: one that opened resets the
+  count, and `maxTransientRetries` in a row rethrow, that being the network rather than the
+  account. A 401 short-circuits it, being the one failure reconnecting cannot fix.
+
+It is not a queue. Whatever happens between two sockets is never delivered, so anything that
+must not miss a change still reads the account on its own schedule.
+
+---
+
 
 ## 4. API Shape
 
@@ -824,6 +862,7 @@ rmapi-kt/
     ├── Entities.kt             # ItemRef, Parent, the Entry hierarchy, ids and hashes
     ├── Content.kt              # the Content hierarchy, Metadata, CPages, wire enums
     ├── Serialization.kt        # Parent/Tags serializers, Content discrimination
+    ├── Notifications.kt        # the reconnecting notification socket  (§D14)
     ├── RmPage.kt               # what every .rm version decodes to: point/stroke/layer,
     │                           #   the pen and colour codes, the shared header  (§D13)
     ├── RmV5.kt                 # the v3/v5 parser and serializer  (§D13)
@@ -932,8 +971,9 @@ Two areas carry more than the rest, because they are where the risk is:
 
 **In scope**: registration, auth, and sessions; both client tiers; all wire types; the
 cache with dump/prune/clear and an LRU bound; the error taxonomy; the device table;
-schema 3 and 4 reads with schema-4 root writes; the ingestion upload endpoint; and `.rm`
-stroke parsing and writing (§D13). The only HTTP-related public surface is `SessionOptions.httpClient`
+schema 3 and 4 reads with schema-4 root writes; the ingestion upload endpoint; `.rm`
+stroke parsing and writing (§D13); and the notification socket (§D14). The only
+HTTP-related public surface is `SessionOptions.httpClient`
 (§D3), and there are no test seams (§D10).
 
 **Out of scope** (not "deferred" — simply not part of this project; §2.2 has the
@@ -942,6 +982,5 @@ content-only file replace, automatic token refresh (device tokens don't expire;
 session-token refresh is "recreate the client"), request-concurrency limits, `Flow` listing
 variants, annotated-PDF export, thumbnails, disk tree cache, sync10
 and the dead `/sync/v2/signed-urls/*` + `/sync/v2/sync-complete` endpoints,
-websocket/notification events (notification is the `broadcast` flag on the root PUT),
 `.rmapi` config files (token persistence is the caller's job), and a blocking/Java facade
 (the README points at the `kotlinx.coroutines.future` bridge).

@@ -4,6 +4,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.UUID
@@ -120,6 +121,7 @@ public data class BulkResult(
 @Suppress("TooManyFunctions")
 public class RemarkableClient internal constructor(
     private val rawClient: RawRemarkableClient,
+    private val socket: NotificationSocket,
     sessionToken: SessionToken,
     private val maxGenerationRetries: Int,
 ) {
@@ -130,8 +132,8 @@ public class RemarkableClient internal constructor(
      * the id this client registered under
      *
      * The uuid handed to [register], which reMarkable stamps on everything this client
-     * does, and so what tells this client's changes apart from a tablet's. Read out of the
-     * session token, which carries it.
+     * does — so it is what [notifications] reports for this client's own writes, and what
+     * tells those apart from a tablet's. Read out of the session token, which carries it.
      */
     public val deviceId: DeviceId by lazy { deviceIdOf(sessionToken) }
 
@@ -161,6 +163,37 @@ public class RemarkableClient internal constructor(
             }
         }
     }
+
+    /**
+     * every sync of this account, for as long as the flow is collected
+     *
+     * reMarkable pushes a notification whenever a device finishes syncing. It names the
+     * device and nothing else about the change — no item, no generation — so [refreshRoot]
+     * is the answer to one: this shortens the wait before the trip, it does not save it.
+     * Comparing against [deviceId] is how a client ignores its own writes. Other kinds of
+     * event share the socket, screen sharing among them, and are passed over.
+     *
+     * Cold, so nothing is opened until somebody collects. The socket is then reopened
+     * whenever the account drops it, which it does every couple of minutes, and leaving
+     * the flow closes it. Which also makes this not a queue — whatever happens between two
+     * sockets is never delivered — so anything that must not miss a change still reads on
+     * its own schedule. A session token lasts a few hours, so a flow collected for longer
+     * than that eventually fails to reconnect.
+     *
+     * ```kotlin
+     * api.notifications()
+     *     .filter { it.attributes.sourceDeviceID != api.deviceId }
+     *     .collect { show(api.refreshRoot()) }
+     * ```
+     *
+     * @throws ResponseException if the session token is refused, the one failure
+     *   reconnecting cannot fix; get a fresh token with [auth] and build a new client
+     * @throws java.io.IOException if the socket will not open [SessionOptions.maxTransientRetries]
+     *   times in a row, which means the network rather than the account
+     * @throws ValidationException if a notification carries something this library cannot
+     *   read
+     */
+    public fun notifications(): Flow<SyncEvent> = socket.notifications()
 
     /**
      * The cached root, fetched on first use.

@@ -14,7 +14,7 @@ import kotlin.random.Random
 /** the body the cloud returns when the root generation it was given is stale */
 private const val PRECONDITION_FAILED = "{\"message\":\"precondition failed\"}\n"
 
-private const val TRANSIENT_BASE_MS = 200L
+internal const val TRANSIENT_BASE_MS = 200L
 private const val BACKOFF_CAP_MS = 30_000L
 
 private const val TOO_MANY_REQUESTS = 429
