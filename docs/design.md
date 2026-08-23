@@ -293,7 +293,11 @@ line over `getPages`, because fetching one blob is different work from downloadi
 parsing every page to return one. `setPage` genuinely is one line over `setPages` and is
 kept anyway — once `getPage` exists, a missing `setPage` becomes its own puzzle. `trash` and
 `bulkTrash` are one line over `move`, and are kept because the trash is not a folder: naming
-it as a verb is what tells a caller that deleting is a move, and therefore reversible.
+it as a verb is what tells a caller that trashing is a move, and therefore reversible.
+`purge` is the operation that is not, and shares nothing with them: it shortens the root
+index rather than writing any metadata. `purgeTrash` is its own call because the trash's
+contents are a tree — trashing a folder does not touch what is inside it — so "everything in
+the trash" is not a set a caller can hand over.
 `raw.getRm`/`raw.stageRm` are kept for the same reason — the raw tier pairs a `get*` with a
 `stage*` for every file kind it names, and a half-pair reads as though writing were
 supported and reading were not.

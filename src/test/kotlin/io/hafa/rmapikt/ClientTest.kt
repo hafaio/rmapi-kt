@@ -601,6 +601,107 @@ class ClientTest {
     }
 
     @Test
+    fun `purge drops an item from the root instead of moving it`() = runTest {
+        val api = client()
+        val doomed = api.putPdf("doomed", byteArrayOf(1))
+        val kept = api.putPdf("kept", byteArrayOf(2))
+
+        val metadataWrites = { cloud.requestsFor(METADATA_SUFFIX).count { it.method == "PUT" } }
+        val writesBefore = metadataWrites()
+        api.purge(doomed)
+
+        assertEquals(listOf(kept), api.listRefs())
+        assertEquals(writesBefore, metadataWrites(), "the item is dropped, not marked as anything")
+    }
+
+    @Test
+    fun `purge refuses a ref the root does not list`() = runTest {
+        val api = client()
+        val kept = api.putPdf("kept", byteArrayOf(1))
+        val stale = ItemRef(kept.id, FileHash("a".repeat(64)))
+
+        val error = assertFailsWith<HashNotFoundException> { api.purge(stale) }
+        assertEquals(kept.hash, error.currentHash, "the item is still there, under its own hash")
+        assertEquals(listOf(kept), api.listRefs(), "and the root is untouched")
+    }
+
+    @Test
+    fun `purgeTrash removes a trashed folder and everything inside it`() = runTest {
+        val api = client()
+        val folder = api.putFolder("box")
+        val inside = api.putPdf("inside", byteArrayOf(1), PutOptions(Parent.Folder(folder.id)))
+        val nested = api.putFolder("inner box", Parent.Folder(folder.id))
+        val deeper = api.putPdf("deeper", byteArrayOf(2), PutOptions(Parent.Folder(nested.id)))
+        val kept = api.putPdf("kept", byteArrayOf(3))
+        // only the folder is moved; its contents keep pointing at it, as the device leaves them
+        val trashed = api.trash(folder)
+
+        val before = cloud.generation
+        val purged = api.purgeTrash()
+
+        assertEquals(setOf(trashed, inside, nested, deeper), purged)
+        assertEquals(listOf(kept), api.listRefs())
+        assertEquals(before + 1, cloud.generation, "one root write for the whole tree")
+    }
+
+    @Test
+    fun `purgeTrash leaves the contents of a folder that is not in the trash`() = runTest {
+        val api = client()
+        val folder = api.putFolder("box")
+        val inside = api.putPdf("inside", byteArrayOf(1), PutOptions(Parent.Folder(folder.id)))
+        val trashed = api.trash(api.putPdf("elsewhere", byteArrayOf(2)))
+
+        assertEquals(setOf(trashed), api.purgeTrash())
+        assertEquals(setOf(folder, inside), api.listRefs().toSet())
+    }
+
+    @Test
+    fun `purgeTrash with an empty trash leaves the root and its generation alone`() = runTest {
+        val api = client()
+        val kept = api.putPdf("kept", byteArrayOf(1))
+        val before = cloud.rootEntries().map { it.hash.hex }
+        val rootWrites = { cloud.received.count { it.path.endsWith("/root") && it.method == "PUT" } }
+        val writesBefore = rootWrites()
+
+        assertEquals(emptySet(), api.purgeTrash())
+        assertEquals(before, cloud.rootEntries().map { it.hash.hex }, "the root is unchanged")
+        assertEquals(writesBefore, rootWrites(), "and no generation was burned")
+        assertEquals(listOf(kept), api.listRefs())
+    }
+
+    @Test
+    fun `bulkPurge drops many items in a single root write`() = runTest {
+        val api = client()
+        val first = api.putPdf("one", byteArrayOf(1))
+        val second = api.putPdf("two", byteArrayOf(2))
+        val kept = api.putPdf("three", byteArrayOf(3))
+
+        val before = cloud.generation
+        val purged = api.bulkPurge(listOf(first, second))
+
+        assertEquals(setOf(first, second), purged)
+        assertEquals(listOf(kept), api.listRefs())
+        assertEquals(before + 1, cloud.generation, "one root write, not one per item")
+    }
+
+    @Test
+    fun `bulkPurge leaves a ref the root no longer lists out of its result`() = runTest {
+        val api = client()
+        val present = api.putPdf("one", byteArrayOf(1))
+        val stale = ItemRef(present.id, FileHash("a".repeat(64)))
+        val absent = ItemRef(
+            ItemId("00000000-0000-4000-8000-000000000000"),
+            FileHash("b".repeat(64)),
+        )
+        val rootWrites = { cloud.received.count { it.path.endsWith("/root") && it.method == "PUT" } }
+        val writesBefore = rootWrites()
+
+        assertEquals(emptySet(), api.bulkPurge(listOf(stale, absent)))
+        assertEquals(listOf(present), api.listRefs(), "nothing is removed on its id alone")
+        assertEquals(writesBefore, rootWrites(), "and no generation was burned")
+    }
+
+    @Test
     fun `bulkMove reports refs it could not find instead of dropping them`() = runTest {
         val api = client()
         val folder = api.putFolder("dest")
