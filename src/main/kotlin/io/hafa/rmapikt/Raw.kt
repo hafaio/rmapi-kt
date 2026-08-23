@@ -177,6 +177,15 @@ public class RawRemarkableClient internal constructor(
     public suspend fun getEntries(fileName: String, hash: FileHash): EntryIndex =
         parseEntryIndex(getText(fileName, hash))
 
+    /**
+     * parses [hash] as the account's root index
+     *
+     * The root is the one index that is not an item's, so it is reached by its own method
+     * rather than by knowing the name it goes by — which is not the name [stageRootEntries]
+     * writes it under either.
+     */
+    public suspend fun getRootEntries(hash: FileHash): EntryIndex = getEntries(ROOT_SCHEMA, hash)
+
     /** parses [hash] as a `.content` file */
     public suspend fun getContent(fileName: String, hash: FileHash): Content =
         decodeContent(getText(fileName, hash))
@@ -295,6 +304,17 @@ public class RawRemarkableClient internal constructor(
             bytes = body,
         )
     }
+
+    /**
+     * builds the account's root index over [entries]
+     *
+     * No schema to choose: reMarkable refuses a schema 3 root with a 400 and "Software must
+     * be updated", so the root is schema 4 by construction here rather than by a check that
+     * fails at the wrong moment. The index also names itself `.` rather than `root`, which
+     * is the other thing this spares a caller knowing.
+     */
+    public fun stageRootEntries(entries: List<RawEntry>): StagedFile =
+        stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
 
     /** sends one staged file; a hash the store already has costs no request */
     public suspend fun upload(staged: StagedFile) {

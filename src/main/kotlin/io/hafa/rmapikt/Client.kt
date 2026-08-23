@@ -253,14 +253,14 @@ public class RemarkableClient internal constructor(
     private suspend fun commitNewItem(files: List<StagedFile>, docSchema: StagedFile) =
         withGenerationRetry {
             val current = root()
-            val entries = rawClient.getEntries(ROOT_SCHEMA, current.hash).entries
+            val entries = rawClient.getRootEntries(current.hash).entries
             // ids are minted UUIDs, so a collision means a bug up the stack; appending
             // anyway would commit a root holding two items under one id
             check(entries.none { it.id == docSchema.entry.id }) {
                 "id '${docSchema.entry.id}' is already in the root index"
             }
             val rootIndex =
-                rawClient.stageEntries(ROOT_LIST, entries + docSchema.entry, SchemaVersion.V4)
+                rawClient.stageRootEntries(entries + docSchema.entry)
             uploadAll(files + docSchema + rootIndex)
             commitRoot(rootIndex.entry.hash, current.generation)
         }
@@ -284,13 +284,13 @@ public class RemarkableClient internal constructor(
     ): ItemRef {
         withGenerationRetry {
             val attempt = root()
-            val entries = rawClient.getEntries(ROOT_SCHEMA, attempt.hash).entries.toMutableList()
+            val entries = rawClient.getRootEntries(attempt.hash).entries.toMutableList()
             val index = entries.indexOfFirst { it.id == ref.id.value && it.hash == ref.hash }
             if (index < 0) {
                 throw HashNotFoundException(ref, entries.firstOrNull { it.id == ref.id.value }?.hash)
             }
             entries[index] = docSchema.entry
-            val rootIndex = rawClient.stageEntries(ROOT_LIST, entries, SchemaVersion.V4)
+            val rootIndex = rawClient.stageRootEntries(entries)
             uploadAll(files + docSchema + rootIndex)
             commitRoot(rootIndex.entry.hash, attempt.generation)
         }
@@ -307,7 +307,7 @@ public class RemarkableClient internal constructor(
      */
     private suspend fun beginEdit(ref: ItemRef): SchemaVersion {
         val current = root()
-        val entries = rawClient.getEntries(ROOT_SCHEMA, current.hash).entries
+        val entries = rawClient.getRootEntries(current.hash).entries
         if (entries.none { it.id == ref.id.value && it.hash == ref.hash }) {
             throw HashNotFoundException(ref, entries.firstOrNull { it.id == ref.id.value }?.hash)
         }
@@ -316,7 +316,7 @@ public class RemarkableClient internal constructor(
 
     /** every item's id and hash, without fetching any metadata */
     public suspend fun listRefs(): List<ItemRef> =
-        rawClient.getEntries(ROOT_SCHEMA, root().hash).entries
+        rawClient.getRootEntries(root().hash).entries
             .map { ItemRef(ItemId.ofWire(it.id), it.hash) }
 
     private suspend fun componentEntries(ref: ItemRef): List<RawEntry> =
@@ -949,7 +949,7 @@ public class RemarkableClient internal constructor(
         // keyed on both halves, per [commitEdit], and keying on the hash alone would also
         // silently drop a duplicate ref
         val wanted = refs.associateBy { it.id.value to it.hash }
-        val toUpdate = rawClient.getEntries(ROOT_SCHEMA, current.hash).entries
+        val toUpdate = rawClient.getRootEntries(current.hash).entries
             .filter { (it.id to it.hash) in wanted }
         if (toUpdate.isEmpty()) {
             return BulkResult(emptyMap(), refs.toSet())
@@ -978,7 +978,7 @@ public class RemarkableClient internal constructor(
         // as not found rather than being written over
         val rewritten = withGenerationRetry {
             val attempt = root()
-            val entries = rawClient.getEntries(ROOT_SCHEMA, attempt.hash).entries
+            val entries = rawClient.getRootEntries(attempt.hash).entries
             val applied = entries.mapNotNull { entry ->
                 edits[entry.id to entry.hash]?.let { (entry.id to entry.hash) to it }
             }
@@ -986,10 +986,8 @@ public class RemarkableClient internal constructor(
             if (applied.isEmpty()) {
                 emptyList()
             } else {
-                val rootIndex = rawClient.stageEntries(
-                    ROOT_LIST,
+                val rootIndex = rawClient.stageRootEntries(
                     entries.map { edits[it.id to it.hash] ?: it },
-                    SchemaVersion.V4,
                 )
                 uploadAll(files + rootIndex)
                 commitRoot(rootIndex.entry.hash, attempt.generation)
@@ -1020,7 +1018,7 @@ public class RemarkableClient internal constructor(
         val unreachable = rawClient.cachedHashes().toMutableSet()
         unreachable.remove(current.hash.hex)
 
-        var frontier = listOf(rawClient.getEntries(ROOT_SCHEMA, current.hash).entries)
+        var frontier = listOf(rawClient.getRootEntries(current.hash).entries)
         while (frontier.isNotEmpty()) {
             val reached = frontier.flatten()
             reached.forEach { unreachable.remove(it.hash.hex) }
