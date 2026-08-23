@@ -927,8 +927,27 @@ public class RemarkableClient internal constructor(
     public suspend fun move(ref: ItemRef, parent: Parent): ItemRef =
         editMetadata(ref) { it.copy(parent = parent) }
 
-    /** moves an item to the trash; reMarkable has no hard delete */
+    /** moves an item to the trash, where the device can still restore it */
     public suspend fun trash(ref: ItemRef): ItemRef = move(ref, Parent.Trash)
+
+    /**
+     * removes an item from the account instead of moving it to the trash
+     *
+     * The entry leaves the root index, which is as deleted as anything gets here: the
+     * item's blobs stay in the store, no longer reachable from any index, and nothing
+     * restores it. Only the item named goes — purging a folder leaves whatever was inside
+     * it pointing at a folder that is no longer there, so purge the contents first.
+     *
+     * @throws HashNotFoundException if [ref] is not in the current root index
+     */
+    public suspend fun purge(ref: ItemRef): Unit = withGenerationRetry {
+        val current = root()
+        val entries = rawClient.getRootEntries(current.hash).entries
+        if (entries.none { it.id == ref.id.value && it.hash == ref.hash }) {
+            throw HashNotFoundException(ref, entries.firstOrNull { it.id == ref.id.value }?.hash)
+        }
+        commitWithout(current, entries, setOf(ref.id.value))
+    }
 
     /** renames an item */
     public suspend fun rename(ref: ItemRef, visibleName: String): ItemRef =
@@ -1006,6 +1025,72 @@ public class RemarkableClient internal constructor(
     public suspend fun bulkTrash(refs: Collection<ItemRef>): BulkResult =
         bulkMove(refs, Parent.Trash)
 
+    /**
+     * purges many items in one root write
+     *
+     * The bulk form of [purge], and like [bulkMove] it passes over a ref the root index no
+     * longer lists rather than failing the batch; subtract the result from what was handed
+     * in to see those. An item another client has written since is at a hash this call was
+     * not given, so it is left alone rather than removed on the strength of its id.
+     *
+     * @return the refs that were removed
+     */
+    public suspend fun bulkPurge(refs: Collection<ItemRef>): Set<ItemRef> = withGenerationRetry {
+        val current = root()
+        val entries = rawClient.getRootEntries(current.hash).entries
+        // keyed on both halves, per [commitEdit]
+        val wanted = refs.associateBy { it.id.value to it.hash }
+        val found = entries.filter { (it.id to it.hash) in wanted }
+        if (found.isEmpty()) {
+            // the server accepts an unchanged root and still burns a generation
+            emptySet()
+        } else {
+            commitWithout(current, entries, found.mapTo(mutableSetOf()) { it.id })
+            found.mapTo(mutableSetOf()) { wanted.getValue(it.id to it.hash) }
+        }
+    }
+
+    /**
+     * purges everything the trash holds, in a single root write
+     *
+     * Trashing a folder does not touch what is inside it — those items keep pointing at
+     * the folder, which is what lets the device restore the lot together — so the trash's
+     * contents are the whole tree hanging off it, not just the items that name it. Reading
+     * that tree costs one `.metadata` per item in the account.
+     *
+     * @return a ref to each item removed, at the state it was removed in
+     * @throws ValidationException if any item's `.metadata` cannot be read, since an item
+     *   whose parent is unknown cannot be shown to be outside the trash
+     */
+    public suspend fun purgeTrash(): Set<ItemRef> = withGenerationRetry {
+        val current = root()
+        val entries = rawClient.getRootEntries(current.hash).entries
+        val trashed = trashedIds(entries)
+        if (trashed.isEmpty()) {
+            emptySet()
+        } else {
+            commitWithout(current, entries, trashed)
+            entries.filter { it.id in trashed }
+                .mapTo(mutableSetOf()) { ItemRef(ItemId.ofWire(it.id), it.hash) }
+        }
+    }
+
+    /**
+     * Commits a root index with [doomed] left out of it.
+     *
+     * Nothing else is staged: the remaining items are already in the store at the hashes
+     * this index lists, and removal is only ever a shorter root.
+     */
+    private suspend fun commitWithout(
+        current: RootInfo,
+        entries: List<RawEntry>,
+        doomed: Set<String>,
+    ) {
+        val rootIndex = rawClient.stageRootEntries(entries.filterNot { it.id in doomed })
+        uploadAll(listOf(rootIndex))
+        commitRoot(rootIndex.entry.hash, current.generation)
+    }
+
     /** to hand back as [SessionOptions.cache] in a later session */
     public fun dumpCache(): String = rawClient.dumpCache()
 
@@ -1033,6 +1118,30 @@ public class RemarkableClient internal constructor(
             .awaitAll()
     }
 }
+
+/** Every id in the trash, walking down from the items that name it as their parent. */
+private suspend fun RemarkableClient.trashedIds(entries: List<RawEntry>): Set<String> =
+    coroutineScope {
+        val children = entries
+            .map { entry ->
+                async {
+                    val ref = ItemRef(ItemId.ofWire(entry.id), entry.hash)
+                    getMetadata(ref).parent.wire to entry.id
+                }
+            }
+            .awaitAll()
+            .groupBy({ (parent, _) -> parent }, { (_, id) -> id })
+
+        val trashed = mutableSetOf<String>()
+        var frontier = children[Parent.Trash.wire].orEmpty()
+        while (frontier.isNotEmpty()) {
+            trashed.addAll(frontier)
+            // subtracting what has been seen also ends a parent cycle, which the account
+            // should never hold but which would otherwise loop here forever
+            frontier = frontier.flatMap { children[it].orEmpty() } - trashed
+        }
+        trashed
+    }
 
 /** Reports page ids an item does not declare; shared so a read and a write agree. */
 private fun noSuchPages(itemId: String, pageIds: Collection<String>): Nothing =

@@ -127,7 +127,17 @@ by hand is exactly the transposition hazard `ItemRef` exists to prevent:
 val renamed = api.rename(ref, "a better name")
 val starred = api.star(renamed, true)
 val moved = api.move(starred, Parent.Folder(folder.id))
-api.trash(moved)                                // there is no hard delete
+api.trash(moved)
+```
+
+`trash` is a move, so the device can still restore the item. `purge` is not: it drops the
+entry from the root index and nothing brings it back. `purgeTrash` does the same to
+everything the trash holds, including whatever sits inside a trashed folder — the device
+leaves those pointing at the folder rather than moving them:
+
+```kotlin
+api.purge(ref)                   // gone from the account, not moved
+val removed = api.purgeTrash()   // a ref to each item removed
 ```
 
 `.pagedata` names the template behind each page, positionally:
@@ -174,6 +184,8 @@ silently skipping them:
 val result = api.bulkTrash(listOf(firstRef, secondRef))
 result.moved            // Map<ItemRef, ItemRef>, old to new
 result.notFound         // refs that were no longer in the root index
+
+val removed = api.bulkPurge(listOf(firstRef, secondRef))   // Set<ItemRef>, the refs that are gone
 ```
 
 Content works the same way, with a typed getter for each shape so nothing needs casting:
