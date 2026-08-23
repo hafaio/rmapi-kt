@@ -268,9 +268,10 @@ naming it once is cheaper than repeating it — especially since the answer is a
 "no".
 
 **Return something usable.** An edit returns an `ItemRef`, not a bare hash, so the result of
-one edit is the input to the next. A bulk edit returns a `BulkResult` with both what moved
-and what it could not find, so a caller who ignores the return value cannot silently receive
-a partial no-op.
+one edit is the input to the next. A bulk edit returns only what it changed. It also named
+what it could not find, until that half was removed: a ref the batch passed over is the
+caller's own input minus the result, so carrying it cost a type and a field to say something
+the caller already had.
 
 **A method must add something a caller cannot.** The test is whether removing it would push
 the caller down to `raw`. `uploadPdf` passes — without it there is no way to name the right

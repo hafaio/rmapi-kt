@@ -97,19 +97,6 @@ public data class ImportOptions(
 )
 
 /**
- * what a bulk operation did
- *
- * The two halves are separate so a caller cannot mistake a partial result for a complete
- * one: a ref that was not in the root index is reported rather than quietly dropped.
- */
-public data class BulkResult(
-    /** each ref that moved, mapped to a ref at its new state */
-    public val moved: Map<ItemRef, ItemRef>,
-    /** the refs that were not in the root index, and so were left alone */
-    public val notFound: Set<ItemRef>,
-)
-
-/**
  * the reMarkable cloud, in terms of documents rather than hashes
  *
  * Every mutating call is a read-modify-write against the account's root index, so two
@@ -960,10 +947,12 @@ public class RemarkableClient internal constructor(
     /**
      * moves many items in a single root write
      *
-     * Racing another client is normal, so a ref no longer in the root index is reported in
-     * [BulkResult.notFound] rather than failing the batch.
+     * Racing another client is normal, so a ref no longer in the root index is passed over
+     * rather than failing the batch; subtract the keys from what was handed in to see those.
+     *
+     * @return each ref that moved, mapped to a ref at its new state
      */
-    public suspend fun bulkMove(refs: Collection<ItemRef>, parent: Parent): BulkResult {
+    public suspend fun bulkMove(refs: Collection<ItemRef>, parent: Parent): Map<ItemRef, ItemRef> {
         val current = root()
         // keyed on both halves, per [commitEdit], and keying on the hash alone would also
         // silently drop a duplicate ref
@@ -971,7 +960,7 @@ public class RemarkableClient internal constructor(
         val toUpdate = rawClient.getRootEntries(current.hash).entries
             .filter { (it.id to it.hash) in wanted }
         if (toUpdate.isEmpty()) {
-            return BulkResult(emptyMap(), refs.toSet())
+            return emptyMap()
         }
 
         val staged = coroutineScope {
@@ -1014,15 +1003,14 @@ public class RemarkableClient internal constructor(
             }
         }
 
-        val moved = rewritten.associate { (key, entry) ->
+        return rewritten.associate { (key, entry) ->
             val ref = wanted.getValue(key)
             ref to ItemRef(ref.id, entry.hash)
         }
-        return BulkResult(moved = moved, notFound = (refs.toSet() - moved.keys))
     }
 
     /** trashes many items in one root write; see [bulkMove] */
-    public suspend fun bulkTrash(refs: Collection<ItemRef>): BulkResult =
+    public suspend fun bulkTrash(refs: Collection<ItemRef>): Map<ItemRef, ItemRef> =
         bulkMove(refs, Parent.Trash)
 
     /**
