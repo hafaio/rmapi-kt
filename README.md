@@ -177,15 +177,14 @@ a read, a `copy`, and a write:
 api.setMetadata(ref, api.getMetadata(ref).copy(lastOpenedPage = 12))
 ```
 
-Bulk edits take one root write, and say which refs they could not find rather than
-silently skipping them:
+Bulk edits take one root write and return only what they changed. A ref the root index no
+longer lists is passed over, so subtract the result from what you handed in to find those:
 
 ```kotlin
-val result = api.bulkTrash(listOf(firstRef, secondRef))
-result.moved            // Map<ItemRef, ItemRef>, old to new
-result.notFound         // refs that were no longer in the root index
-
-val removed = api.bulkPurge(listOf(firstRef, secondRef))   // Set<ItemRef>, the refs that are gone
+val refs = listOf(firstRef, secondRef)
+val moved = api.bulkTrash(refs)     // Map<ItemRef, ItemRef>, old to new
+val removed = api.bulkPurge(refs)   // Set<ItemRef>, the refs that are gone
+val missing = refs - moved.keys     // the ones someone else had already written past
 ```
 
 Content works the same way, with a typed getter for each shape so nothing needs casting:

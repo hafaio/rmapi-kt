@@ -352,9 +352,7 @@ class ClientTest {
         val other = api.putPdf("other", byteArrayOf(2))
 
         val mismatched = ItemRef(other.id, target.hash)
-        val result = api.bulkMove(listOf(mismatched), Parent.Trash)
-        assertEquals(emptyMap(), result.moved)
-        assertEquals(setOf(mismatched), result.notFound)
+        assertEquals(emptyMap(), api.bulkMove(listOf(mismatched), Parent.Trash))
         assertEquals(Parent.Root, api.getMetadata(target).parent, "the item is untouched")
     }
 
@@ -580,11 +578,10 @@ class ClientTest {
         val before = cloud.generation
         val moved = api.bulkMove(listOf(first, second), Parent.Folder(folder.id))
 
-        assertEquals(setOf(first, second), moved.moved.keys)
-        assertEquals(emptySet(), moved.notFound)
+        assertEquals(setOf(first, second), moved.keys)
         assertEquals(before + 1, cloud.generation, "one root write, not one per item")
         assertEquals(3, cloud.rootEntries().size, "the folder and both documents remain")
-        for (newRef in moved.moved.values) {
+        for (newRef in moved.values) {
             assertEquals(Parent.Folder(folder.id), api.getMetadata(newRef).parent)
         }
     }
@@ -595,7 +592,7 @@ class ClientTest {
         val first = api.putPdf("one", byteArrayOf(1))
         val second = api.putPdf("two", byteArrayOf(2))
         val moved = api.bulkTrash(listOf(first, second))
-        for (newRef in moved.moved.values) {
+        for (newRef in moved.values) {
             assertEquals(Parent.Trash, api.getMetadata(newRef).parent)
         }
     }
@@ -702,7 +699,7 @@ class ClientTest {
     }
 
     @Test
-    fun `bulkMove reports refs it could not find instead of dropping them`() = runTest {
+    fun `bulkMove leaves a ref it could not find out of its result`() = runTest {
         val api = client()
         val folder = api.putFolder("dest")
         val present = api.putPdf("one", byteArrayOf(1))
@@ -712,8 +709,7 @@ class ClientTest {
         )
 
         val result = api.bulkMove(listOf(present, absent), Parent.Folder(folder.id))
-        assertEquals(setOf(present), result.moved.keys)
-        assertEquals(setOf(absent), result.notFound, "a missing ref must not vanish silently")
+        assertEquals(setOf(present), result.keys, "the caller subtracts to find the absent one")
     }
 
     @Test
@@ -1074,9 +1070,7 @@ class ClientTest {
         val writesBefore = rootWrites()
         val absent = ItemRef(ItemId("22222222-2222-4222-8222-222222222222"), FileHash("a".repeat(64)))
 
-        val result = api.bulkMove(listOf(absent), Parent.Trash)
-        assertEquals(emptyMap(), result.moved)
-        assertEquals(setOf(absent), result.notFound)
+        assertEquals(emptyMap(), api.bulkMove(listOf(absent), Parent.Trash))
         assertEquals(before, cloud.rootEntries().map { it.hash.hex }, "the root is unchanged")
         assertEquals(writesBefore, rootWrites(), "and no generation was burned")
     }
