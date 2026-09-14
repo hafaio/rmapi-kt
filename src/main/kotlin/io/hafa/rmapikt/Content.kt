@@ -103,6 +103,8 @@ public data class DocumentMetadata(
     public val publicationDate: String? = null,
     /** the publisher */
     public val publisher: String? = null,
+    /** the language of the text, as a BCP 47 tag such as "en" */
+    public val language: String? = null,
 )
 
 /** speculative: a record of keyboard use */

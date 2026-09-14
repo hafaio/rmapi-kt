@@ -160,6 +160,30 @@ class SerializationTest {
     }
 
     @Test
+    fun `the language the cloud now writes into documentMetadata round trips`() {
+        val tagged = """
+            {"coverPageNumber":0,"documentMetadata":{"authors":["Joyce Johnson"],
+             "language":"en","title":"What Jack Kerouac Left Behind"},"extraMetadata":{},
+             "fileType":"epub","fontName":"","lineHeight":-1,"orientation":"portrait",
+             "pageCount":1,"textAlignment":"","textScale":1}
+        """.trimIndent()
+        val untagged = """
+            {"coverPageNumber":0,"documentMetadata":{"title":"t"},"extraMetadata":{},
+             "fileType":"epub","fontName":"","lineHeight":-1,"orientation":"portrait",
+             "pageCount":1,"textAlignment":"","textScale":1}
+        """.trimIndent()
+
+        val document = assertIs<DocumentContent>(decodeWire(ContentSerializer, tagged, "content"))
+        assertEquals("en", document.documentMetadata.language)
+
+        val metadata = roundTrip(tagged)["documentMetadata"] as JsonObject
+        assertEquals(JsonPrimitive("en"), metadata["language"])
+
+        val older = roundTrip(untagged)["documentMetadata"] as JsonObject
+        assertTrue("language" !in older, "an older document must be written back without the key")
+    }
+
+    @Test
     fun `legacy string tags round trip as strings`() {
         val original = """
             {"coverPageNumber":0,"documentMetadata":{},"extraMetadata":{},"fileType":"pdf",
